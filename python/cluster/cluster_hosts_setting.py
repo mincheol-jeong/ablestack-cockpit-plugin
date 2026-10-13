@@ -18,6 +18,11 @@ from ablestack import *
 from sh import python3
 from python_hosts import Hosts, HostsEntry
 
+
+def is_compute(host):
+    return host.get('role') == 'compute'
+
+
 json_file_path = pluginpath+"/tools/properties/cluster.json"
 hosts_file_path = "/etc/hosts"
 def createArgumentParser():
@@ -82,6 +87,17 @@ def changeHosts(args):
             my_hosts.add([entry])
 
         for f_val in json_data["clusterConfig"]["hosts"]:
+            if is_compute(f_val):
+                # Compute nodes have a management and HPN address, but no SCVM.
+                own = hostname == f_val["hostname"]
+                for address, names in [
+                    (f_val["ablecube"], [f_val["hostname"]] + (["ablecube"] if own else [])),
+                    (f_val["ablecubePn"], ["pn-ablecube" + str(f_val["index"])] + (["pn-ablecube"] if own else []))
+                ]:
+                    for name in names:
+                        my_hosts.remove_all_matching(name=name)
+                    my_hosts.add([HostsEntry(entry_type='ipv4', address=address, names=names)])
+                continue
             json_ips = {}
             hostname_arry = []
             if args.type == "powerflex":
@@ -194,7 +210,7 @@ def hostOnly(args):
 
 def withScvm(args):
     ret = changeHosts(args)
-    if os_type == "ablestack-hci" or os_type == "ablestack-hci-filesystem":
+    if (os_type == "ablestack-hci" or os_type == "ablestack-hci-filesystem") and not any(is_compute(h) and h["hostname"] == socket.gethostname() for h in json_data["clusterConfig"]["hosts"]):
         os.system("scp -q -o StrictHostKeyChecking=no " + hosts_file_path + " root@scvm-mngt:/etc/hosts")
     # os.system("scp -q "+ hosts_file_path +" root@scvm-mngt:/etc/hosts")
     return ret

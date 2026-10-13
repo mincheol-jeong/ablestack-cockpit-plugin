@@ -389,8 +389,8 @@ function resetWallMonitoringWizard() {
     host_ping_test_cmd.push(cubehost_ip);
   }
 
-  if (os_type == "ablebstack-hci"){
-    for(var i = 1 ; i <= host_count ; i ++ ){
+  if (os_type == "ablestack-hci" || os_type == "ablestack-hci-filesystem"){
+    for(var i = 1 ; i <= $('[id^="form-input-wall-monitoring-scvm"][id$="-ip"]').length ; i ++ ){
       var scvm_ip = $('#form-input-wall-monitoring-scvm'+i+'-ip').val();
       host_ping_test_cmd.push(scvm_ip);
     }
@@ -431,9 +431,9 @@ function resetWallMonitoringWizard() {
                 var cubehost_ip = $('#form-input-wall-monitoring-cubehost'+i+'-ip').val();
                 prometheus_config_cmd.push(cubehost_ip);
               }
-              if (os_type == "ablestack-hci" || os_type == "ablestack-hci-filesystem"){
+              if ((os_type == "ablestack-hci" || os_type == "ablestack-hci-filesystem") && $('[id^="form-input-wall-monitoring-scvm"][id$="-ip"]').length){
                 prometheus_config_cmd.push('--scvm');
-                for(var i = 1 ; i <= host_count ; i ++ ){
+                for(var i = 1 ; i <= $('[id^="form-input-wall-monitoring-scvm"][id$="-ip"]').length ; i ++ ){
                   var scvm_ip = $('#form-input-wall-monitoring-scvm'+i+'-ip').val();
                   prometheus_config_cmd.push(scvm_ip);
                 }
@@ -673,7 +673,7 @@ function setWallReviewInfo() {
     }
   }
   if (os_type == "ablestack-hci" || os_type == "ablestack-hci-filesystem"){
-    for(var i = 1 ; i <= host_count ; i ++ ){
+    for(var i = 1 ; i <= $('[id^="form-input-wall-monitoring-scvm"][id$="-ip"]').length ; i ++ ){
       var scvm_ip = $('#form-input-wall-monitoring-scvm'+i+'-ip').val();
       if (scvm_ip == '') {
         $('#span-wall-monitoring-scvm'+i+'-ip').text("미입력");
@@ -776,7 +776,7 @@ function validateWallMonitoringVm() {
     }
   }
   if (os_type == "ablestack-hci" || os_type == "ablestack-hci-filesystem"){
-    for(var i = 1 ; i <= host_count ; i ++ ){
+    for(var i = 1 ; i <= $('[id^="form-input-wall-monitoring-scvm"][id$="-ip"]').length ; i ++ ){
       if (validate_check && $('#form-input-wall-monitoring-scvm'+i+'-ip').val() == "") {
         alert('SCVM'+i+' 관리 IP를 입력해주세요.');
         validate_check = false;
@@ -838,10 +838,11 @@ function validateWallMonitoringVm() {
  */
 $('input[type=text][id="form-input-wall-host-number"]').on('change', function () {
   var host_count = $('input[type=text][id="form-input-wall-host-number"]').val();
-  setWallIpInput(host_count);
+  const storageCount = $(this).data('compute-storage-count');
+  setWallIpInput(host_count, storageCount === undefined ? host_count : storageCount);
 });
 
-function setWallIpInput(host_count){
+function setWallIpInput(host_count, scvm_count = host_count){
   $('input[type=text][id="form-input-wall-host-number"]').val(host_count);
   $('#div-wall-ccvm-ip-area').empty();
   $('#div-wall-cubehost-ip-area').empty();
@@ -904,7 +905,7 @@ function setWallIpInput(host_count){
   scvm_el +='    </div>';
   scvm_el +='  </div>';
   scvm_el +='  <div class="pf-v6-c-form__field-group-body" style="padding-top:0px;">';
-  for(var i = 1 ; i <= host_count ; i ++ ){
+  for(var i = 1 ; i <= scvm_count ; i ++ ){
     scvm_el +='    <div class="pf-v6-c-form__group" style="padding:0px;">';
     scvm_el +='      <div class="pf-v6-c-form__group-label">';
     scvm_el +='        <label class="pf-v6-c-form__label" for="form-input-wall-monitoring-scvm1-ip">';
@@ -953,13 +954,13 @@ function setWallIpInput(host_count){
   }
   review_el +='      </dd>';
   review_el +='    </div>';
-  if (os_type == "ablestack-hci" || os_type == "ablestack-hci-filesystem"){
+  if ((os_type == "ablestack-hci" || os_type == "ablestack-hci-filesystem") && scvm_count > 0){
     review_el +='    <div class="pf-v6-c-description-list__group">';
     review_el +='      <dt class="pf-v6-c-description-list__term">';
     review_el +='        <span class="pf-v6-c-description-list__text">스토리지센터 VM</span>';
     review_el +='      </dt>';
     review_el +='      <dd class="pf-v6-c-description-list__description">';
-    for(var i = 1 ; i <= host_count ; i ++ ){
+    for(var i = 1 ; i <= scvm_count ; i ++ ){
       review_el +='        <div class="pf-v6-c-description-list__text">';
       review_el +='          SCVM'+i+' 관리 IP : <span id="span-wall-monitoring-scvm'+i+'-ip"></span><br/>';
       review_el +='        </div>';
@@ -971,7 +972,7 @@ function setWallIpInput(host_count){
 
   $('#div-wall-ccvm-ip-area').append(ccvm_el);
   $('#div-wall-cubehost-ip-area').append(cube_host_el);
-  if (os_type == "ablestack-hci" || os_type == "ablestack-hci-filesystem"){
+  if ((os_type == "ablestack-hci" || os_type == "ablestack-hci-filesystem") && scvm_count > 0){
     $('#div-wall-scvm-ip-area').append(scvm_el);
   }
   $('#div-wall-review-area').append(review_el);
@@ -984,14 +985,16 @@ function autoConfigWallIP(){
     var clusterJsonConf = JSON.parse(data);
     // node 수를 확인하여 입력 박스 만들기
     var host_count = clusterJsonConf.clusterConfig.hosts.length;
-    setWallIpInput(host_count);
+    const storageHosts = clusterJsonConf.clusterConfig.hosts.filter(host => host.role !== "compute" && host.scvmMngt);
+    $('#form-input-wall-host-number').removeData('compute-storage-count');
+    if (storageHosts.length !== host_count) $('#form-input-wall-host-number').data('compute-storage-count', storageHosts.length);
+    setWallIpInput(host_count, storageHosts.length);
+    storageHosts.forEach((host, index) => $("#form-input-wall-monitoring-scvm"+(index+1)+"-ip").val(host.scvmMngt));
     // 인풋 박스에 값 자동 설정 하기
     $("#form-input-wall-monitoring-ccvm-ip").val(clusterJsonConf.clusterConfig.ccvm.ip);
     for (let i = 0 ; i < host_count ; i++){
       $("#form-input-wall-monitoring-cubehost"+(i+1)+"-ip").val(clusterJsonConf.clusterConfig.hosts[i].ablecube);
-      if (os_type != "ablestack-vm"){
-        $("#form-input-wall-monitoring-scvm"+(i+1)+"-ip").val(clusterJsonConf.clusterConfig.hosts[i].scvmMngt);
-      }
+
     }
   })
   .catch(function(data){

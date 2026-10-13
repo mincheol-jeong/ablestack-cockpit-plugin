@@ -16,6 +16,7 @@ var os_type = sessionStorage.getItem("os_type");
 //PFMP 설치 시 퍼센트 값 설정 초가화
 let interval;
 var gfs_file_system_arr = [];
+var currentHostRole = "hci";
 
 function setStatusTone($target, tone) {
   if (!$target || !$target.length) {
@@ -392,7 +393,7 @@ $('#button-open-modal-wizard-monitoring-center').on('click', function () {
 $('#button-link-storage-center-dashboard').on('click', function () {
   // storageCenter url 링크 주소 가져오기
   createLoggerInfo("button-link-storage-center-dashboard click");
-  cockpit.spawn(["python3", pluginpath + "/python/url/create_address.py", "storageCenter"])
+  cockpit.spawn(["python3", pluginpath + "/python/url/create_address.py", "storageCenter"], currentHostRole === 'compute' ? {host: pcs_exe_host} : undefined)
     .then(function (data) {
       var retVal = JSON.parse(data);
       if (retVal.code == 200) {
@@ -949,7 +950,8 @@ $('#button-cancel-modal-remove-cube-host').on('click', function () {
  * Return : 없음
  * History : 2021.03.31 최초 작성
  */
-function checkStorageClusterStatus() {
+function checkStorageClusterStatus(readHost) {
+  const storageSpawn = argv => cockpit.spawn(argv, readHost ? {host: readHost} : undefined);
   //createLoggerInfo("checkStorageClusterStatus() start");
   return new Promise((resolve) => {
     //초기 상태 체크 중 표시
@@ -957,13 +959,13 @@ function checkStorageClusterStatus() {
     $("#scc-css").attr('class', 'pf-v6-c-label pf-m-orange');
     $("#scc-icon").attr('class', 'fas fa-fw fa-exclamation-triangle');
 
-    cockpit.spawn(["cat", pluginpath + "/tools/properties/cluster.json"])
+    storageSpawn(["cat", pluginpath + "/tools/properties/cluster.json"])
       .then(function (data) {
         var retVal = JSON.parse(data);
         if (retVal.clusterConfig.type == "powerflex") {
           setPfmpStatus();
           //bootstrap.sh을 실행했는지 여부 확인
-          cockpit.spawn(["python3", pluginpath + "/python/ablestack_json/ablestackJson.py", "status"])
+          storageSpawn(["python3", pluginpath + "/python/ablestack_json/ablestackJson.py", "status"])
             .then(function (data) {
               var retVal = JSON.parse(data);
               if (retVal.val.bootstrap.scvm == "false") { //bootstrap.sh 실행 전
@@ -992,13 +994,13 @@ function checkStorageClusterStatus() {
               $("#scvm-after-bootstrap-run").html("");
               $("#scvm-before-bootstrap-run").html("");
             });
-          cockpit.spawn(["python3", pluginpath + "/python/powerflex_status/powerflex_status.py", "status"])
+          storageSpawn(["python3", pluginpath + "/python/powerflex_status/powerflex_status.py", "status"])
             .then(function (data) {
               var retVal = JSON.parse(data);
               var pfmp_bootstrap_status = sessionStorage.getItem("pfmp_bootstrap_status");
               if (retVal.code == 200) {
                 //파워플렉스 상태 상세 조회(API => json 형식)
-                cockpit.spawn(["python3", pluginpath + "/python/powerflex_status/powerflex_status.py", "detail"])
+                storageSpawn(["python3", pluginpath + "/python/powerflex_status/powerflex_status.py", "detail"])
                   .then(function (data) {
                     var retVal = JSON.parse(data);
                     var sc_status = "Health Err";
@@ -1119,7 +1121,7 @@ function checkStorageClusterStatus() {
             });
         } else {
           //bootstrap.sh을 실행했는지 여부 확인
-          cockpit.spawn(["python3", pluginpath + "/python/ablestack_json/ablestackJson.py", "status"])
+          storageSpawn(["python3", pluginpath + "/python/ablestack_json/ablestackJson.py", "status"])
             .then(function (data) {
               var retVal = JSON.parse(data);
               if (retVal.val.bootstrap.scvm == "false") { //bootstrap.sh 실행 전
@@ -1140,7 +1142,7 @@ function checkStorageClusterStatus() {
               $("#scvm-before-bootstrap-run").html("");
             });
           //스토리지 클러스터 상태 상세조회(ceph -s => json형식)
-          cockpit.spawn(["python3", pluginpath + "/python/scc_status/scc_status_detail.py", "detail"])
+          storageSpawn(["python3", pluginpath + "/python/scc_status/scc_status_detail.py", "detail"])
             .then(function (data) {
               var retVal = JSON.parse(data);
               var sc_status = "Health Err";
@@ -1431,9 +1433,18 @@ function checkDeployStatus() {
     $('#button-link-hci-shared-file-configure').hide();
     $('#button-link-cloud-center').hide();
     $('#button-open-modal-wizard-monitoring-center').hide();
+    $('#button-link-local-storage-configure').hide();
     $('#button-link-monitoring-center').hide();
     $('#button-config-file-download').hide();
     $('#button-open-modal-security-evidence').hide();
+    if (currentHostRole === 'compute') {
+      $('#button-config-file-download').show();
+      $('#button-link-cloud-center, #button-link-monitoring-center').show();
+      $('#button-link-storage-center-dashboard').toggle(sessionStorage.getItem('scvm_bootstrap_status') === 'true');
+      $('#button-open-modal-security-evidence').toggle(sessionStorage.getItem('security_patch') === 'true');
+      showRibbon('success', '컴퓨팅 노드입니다.');
+      return;
+    }
     /*
     가상머신 배포 및 클러스터 구성 상태를 세션 스토리지에서 조회
     - 클러스터 구성준비 상태 = false, true
@@ -2035,7 +2046,7 @@ function scanHostKey() {
  * History : 2022.09.14 최초 작성
  */
 function pcsExeHost() {
-  cockpit.spawn(['python3', pluginpath + '/python/pcs/pcsExehost.py'])
+  return cockpit.spawn(['python3', pluginpath + '/python/pcs/pcsExehost.py'])
     .then(function (data) {
       let retVal = JSON.parse(data);
       pcs_exe_host = retVal.val;
@@ -2089,7 +2100,79 @@ function resetBootstrap() {
     });
 }
 
+function setComputeDashboardColumns(enabled) {
+  const grid = document.getElementById('ablestack-status-grid');
+  if (!grid) return;
+  const layout = setComputeDashboardColumns.layout;
+  if (!enabled) {
+    if (layout) {
+      layout.cards.forEach(({card, placeholder}) => placeholder.replaceWith(card));
+      layout.left.remove();
+      layout.right.remove();
+      setComputeDashboardColumns.layout = null;
+    }
+    return;
+  }
+  if (layout) return;
+  const cards = ['div-card-storage-cluster-status', 'div-card-cloud-cluster-status', 'div-card-cloud-vm-status-1']
+    .map(id => document.getElementById(id));
+  if (cards.some(card => !card)) return;
+  const left = document.createElement('div');
+  const right = document.createElement('div');
+  left.className = right.className = 'compute-dashboard-column';
+  const placements = cards.map(card => {
+    const placeholder = document.createComment('original dashboard card position');
+    card.parentNode.insertBefore(placeholder, card);
+    return {card, placeholder};
+  });
+  left.append(cards[0], cards[1]);
+  right.append(cards[2]);
+  grid.append(left, right);
+  setComputeDashboardColumns.layout = {cards: placements, left, right};
+}
+
 function ribbonWorker() {
+  return Promise.all([
+    cockpit.file(pluginpath + '/tools/properties/cluster.json').read(),
+    cockpit.spawn(['hostname'])
+  ]).then(function (values) {
+    const config = JSON.parse(values[0]).clusterConfig;
+    const name = values[1].trim().split('.')[0];
+    const host = config.hosts.find(item => item.hostname.split('.')[0] === name);
+    currentHostRole = host && host.role === 'compute' ? 'compute' : 'hci';
+    $('#ablestack-status-grid').toggleClass('compute-dashboard-layout', currentHostRole === 'compute');
+    setComputeDashboardColumns(currentHostRole === 'compute');
+    $('#menu-compute-node-remove').toggle(config.type === 'ablestack-hci' && !!host);
+    if (currentHostRole === 'compute') {
+      $('#div-card-storage-vm-status, #div-card-gfs-cluster-status, #div-card-gfs-disk-status, #div-card-gfs-integration-status, #div-card-local-disk-status, #div-card-cloud-vm-status-2').hide();
+      $('#div-card-storage-cluster-status, #div-card-cloud-cluster-status, #div-card-cloud-vm-status-1').show();
+      $('#dropdown-menu-storage-cluster-status > li').not('#menu-compute-node-remove').hide();
+      return pcsExeHost().then(function () {
+        if (!pcs_exe_host || pcs_exe_host.split('.')[0] === name) {
+          const reference = config.hosts.find(item => item.role !== 'compute');
+          pcs_exe_host = reference ? reference.ablecube : '';
+        }
+        return Promise.allSettled([
+          cockpit.file(pluginpath + '/tools/properties/ablestack.json').read().then(function (data) {
+            const state = JSON.parse(data);
+            sessionStorage.setItem('security_patch', (state.security_patch || {}).status || 'false');
+          }),
+          checkStorageClusterStatus(pcs_exe_host),
+          CardCloudClusterStatus(pcs_exe_host),
+          new CloudCenterVirtualMachine().checkCCVM()
+        ]);
+      }).finally(function () {
+        checkDeployStatus();
+      });
+    }
+    return refreshClusterCards();
+  }).catch(function (error) {
+    createLoggerInfo('호스트 역할 조회 실패');
+    console.log(error);
+  });
+}
+
+function refreshClusterCards() {
   if (os_type == "ablestack-vm") {
     Promise.all([
       pcsExeHost(),

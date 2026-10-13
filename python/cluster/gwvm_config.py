@@ -81,6 +81,8 @@ def create(args):
 
         python3(pluginpath+'/python/host/ssh-scan.py')
 
+        if any(h.get("role") == "compute" and h["hostname"] == socket.gethostname() for h in json_data["clusterConfig"]["hosts"]):
+            return createReturn(code=200, val="Compute host GWVM settings updated.")
         result = 0
         result += os.system("scp -q -o StrictHostKeyChecking=no " + hosts_file_path + " root@scvm-mngt:"+hosts_file_path)
         result += os.system("scp -q -o StrictHostKeyChecking=no " + json_file_path + " root@scvm-mngt:"+json_file_path)
@@ -112,7 +114,10 @@ def remove(args):
 
         python3(pluginpath+'/python/host/ssh-scan.py')
 
-        os.system("scp -q -o StrictHostKeyChecking=no " + hosts_file_path + " root@scvm-mngt:/etc/hosts")
+        if not any(h.get("role") == "compute" and h["hostname"] == socket.gethostname() for h in json_data["clusterConfig"]["hosts"]):
+            os.system("scp -q -o StrictHostKeyChecking=no " + hosts_file_path + " root@scvm-mngt:/etc/hosts")
+        if any(h.get("role") == "compute" and h["hostname"] == socket.gethostname() for h in json_data["clusterConfig"]["hosts"]):
+            return createReturn(code=200, val="Compute host GWVM settings updated.")
         result = 0
         result += os.system("scp -q -o StrictHostKeyChecking=no " + hosts_file_path + " root@scvm-mngt:"+hosts_file_path)
         result += os.system("scp -q -o StrictHostKeyChecking=no " + json_file_path + " root@scvm-mngt:"+json_file_path)

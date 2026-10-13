@@ -76,7 +76,8 @@ def updateAllHostGlueConfig(args):
             host_list = []
             for f_val1 in json_data["clusterConfig"]["hosts"]:
                 host_list.append(f_val1["ablecube"])
-                host_list.append(f_val1["scvmMngt"])
+                if f_val1.get("role") != "compute":
+                    host_list.append(f_val1["scvmMngt"])
 
             ping_result = json.loads(python3(pluginpath+'/python/vm/host_ping_test.py', '-hns', host_list))
 
@@ -88,6 +89,8 @@ def updateAllHostGlueConfig(args):
                     if ret != "ok":
                         return createReturn(code=500, val=return_val + " : " + f_val2["ablecube"])
 
+                    if f_val2.get("role") == "compute":
+                        continue
                     ret = ssh('-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=5', f_val2["scvmMngt"], "echo ok").strip()
                     if ret != "ok":
                         return createReturn(code=500, val=return_val + " : " + f_val2["scvmMngt"])
@@ -100,6 +103,8 @@ def updateAllHostGlueConfig(args):
                     if ret_scp != 0:
                         return createReturn(code=500, val=f_val3["ablecube"]+" : Glue Config copy Failed.")
 
+                    if f_val3.get("role") == "compute":
+                        continue
                     ret_scp = os.system("scp -q /etc/ceph/* root@"+f_val3["scvmMngt"]+":/etc/ceph/")
                     if ret_scp != 0:
                         return createReturn(code=500, val=f_val3["scvmMngt"]+" : Glue Config copy Failed.")

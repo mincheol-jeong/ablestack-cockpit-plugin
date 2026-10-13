@@ -731,6 +731,7 @@ function checkHostName(option) {
 
  async function fileReaderIntoTableFunc(input, file_type, option,os_type) {
   input.addEventListener('change', function (event) {
+    if (option === '' && window.ClusterConfigCompute && ClusterConfigCompute.active()) return;
     let file_list = input.files || event.target.files;
     let file = file_list[0];
     let id = input.getAttribute('id');
@@ -749,6 +750,7 @@ function checkHostName(option) {
         let reader = new FileReader();
         try {
           reader.onload = function (progressEvent) {
+            if (option === '' && window.ClusterConfigCompute && ClusterConfigCompute.active()) return;
             let result = progressEvent.target.result;
             var clusterJsonConf = JSON.parse(result);
             var iscsi_check = clusterJsonConf.clusterConfig.iscsi_storage;
@@ -777,14 +779,18 @@ function checkHostName(option) {
  * History : 2022.10.05 수정
  **/
 function settingProfile(clusterJsonConf, option, os_type, iscsi_check){
+  // Configuration preparation includes compute hosts; SCVM/CCVM forms only edit storage hosts.
+  const allHosts = clusterJsonConf.clusterConfig.hosts;
+  clusterJsonConf = {...clusterJsonConf, clusterConfig: {...clusterJsonConf.clusterConfig,
+    hosts: option === "" && os_type === "ablestack-hci" ? allHosts : allHosts.filter(host => host.role !== "compute")}};
   let hostsJson = clusterJsonConf.clusterConfig.hosts;
-  let hostCnt = clusterJsonConf.clusterConfig.hosts.length; // 설정파일에서 읽어온 node 수
+  let hostCnt = hostsJson.length; // 설정파일에서 읽어온 node 수
   let c_mngt_cidr = clusterJsonConf.clusterConfig.mngtNic.cidr;
   let c_mngt_gw = clusterJsonConf.clusterConfig.mngtNic.gw;
   let c_mngt_dns = clusterJsonConf.clusterConfig.mngtNic.dns;
 
   let insert_tr = "";
-  let max_index = 0;
+  let max_index = Math.max(0, ...allHosts.map(host => Number(host.index) || 0)) + 1;
   let current_host_name = $("#form-input-current-host-name").val();
   let add_tr_yn = true;
   if(os_type == "ablestack-vm" || os_type == "ablestack-standalone"){
@@ -808,7 +814,7 @@ function settingProfile(clusterJsonConf, option, os_type, iscsi_check){
       }
     }
 
-    // cluster_host_yn은 신규 클러스터 호스트 = new, 추가 호스트 = add / hostsJson에 현재 호스트명과 동일한 호스트명이 존재하면 추가하지 않음
+    // cluster_host_yn은 신규 클러스터 호스트 = new, 노드 추가 = add / hostsJson에 현재 호스트명과 동일한 호스트명이 존재하면 추가하지 않음
     // cluster_host_yn = $('input[name=radio-cluster-host]:checked').val()
     // if(cluster_host_yn=="add" && option == "") {
     if(option == "") {
@@ -835,6 +841,9 @@ function settingProfile(clusterJsonConf, option, os_type, iscsi_check){
     $('#form-input-cluster-config-host-number'+option+'').val(hostCnt);
     $('#form-table-tbody-cluster-config-existing-host-profile'+option+' tr').remove();
     $(insert_tr).appendTo('#form-table-tbody-cluster-config-existing-host-profile'+option+'');
+    if (option === '' && add_tr_yn && $('input[name=radio-cluster-host]:checked').val() === 'add' && window.ClusterPrepareLocalHost) {
+      ClusterPrepareLocalHost.fill($('#form-table-tbody-cluster-config-existing-host-profile tr').last());
+    }
 
     if(option == "-ccvm"){
       // 세팅 값 초기화
@@ -870,14 +879,15 @@ function settingProfile(clusterJsonConf, option, os_type, iscsi_check){
     }
   }else{
     for (let i = 0 ; i < hostCnt ; i++){
-      insert_tr += "<tr style='border-bottom: solid 1px #dcdcdc'>";
+      const isCompute = hostsJson[i].role === "compute";
+      insert_tr += "<tr" + (isCompute ? " data-host-role='compute'" : "") + " style='border-bottom: solid 1px #dcdcdc'>";
       insert_tr += " <td contenteditable='false'>"+hostsJson[i].index+"</td>";
       insert_tr += " <td contenteditable='false'>"+hostsJson[i].hostname+"</td>";
       insert_tr += " <td contenteditable='false'>"+hostsJson[i].ablecube+"</td>";
-      insert_tr += " <td contenteditable='false'>"+hostsJson[i].scvmMngt+"</td>";
+      insert_tr += " <td contenteditable='false'>"+(isCompute ? "-" : hostsJson[i].scvmMngt)+"</td>";
       insert_tr += " <td contenteditable='false'>"+hostsJson[i].ablecubePn+"</td>";
-      insert_tr += " <td contenteditable='false'>"+hostsJson[i].scvm+"</td>";
-      insert_tr += " <td contenteditable='false'>"+hostsJson[i].scvmCn+"</td>";
+      insert_tr += " <td contenteditable='false'>"+(isCompute ? "-" : hostsJson[i].scvm)+"</td>";
+      insert_tr += " <td contenteditable='false'>"+(isCompute ? "-" : hostsJson[i].scvmCn)+"</td>";
       insert_tr += "</tr>";
 
       if(Number(hostsJson[i].index) >= max_index) {
@@ -888,7 +898,7 @@ function settingProfile(clusterJsonConf, option, os_type, iscsi_check){
       }
     }
 
-    // cluster_host_yn은 신규 클러스터 호스트 = new, 추가 호스트 = add / hostsJson에 현재 호스트명과 동일한 호스트명이 존재하면 추가하지 않음
+    // cluster_host_yn은 신규 클러스터 호스트 = new, 노드 추가 = add / hostsJson에 현재 호스트명과 동일한 호스트명이 존재하면 추가하지 않음
     // cluster_host_yn = $('input[name=radio-cluster-host]:checked').val()
     // if(cluster_host_yn=="add" && option == "") {
     if(option == "") {
@@ -919,6 +929,9 @@ function settingProfile(clusterJsonConf, option, os_type, iscsi_check){
     $('#form-input-cluster-config-host-number'+option+'').val(hostCnt);
     $('#form-table-tbody-cluster-config-existing-host-profile'+option+' tr').remove();
     $(insert_tr).appendTo('#form-table-tbody-cluster-config-existing-host-profile'+option+'');
+    if (option === '' && add_tr_yn && $('input[name=radio-cluster-host]:checked').val() === 'add' && window.ClusterPrepareLocalHost) {
+      ClusterPrepareLocalHost.fill($('#form-table-tbody-cluster-config-existing-host-profile tr').last());
+    }
 
     //option이 -scvm 일 경우 스토리지센터 가상머신 배포 마법사 네트워크 자동 세팅
     if(option == "-scvm"){
@@ -1108,6 +1121,14 @@ function tableToHostsText(table_tr_obj, option, os_type, iscsi_check){
   }
 
   table_tr_obj.each(function(){
+    if ($(this).attr('data-host-role') === 'compute') {
+      const cells = $(this).find('td');
+      const idx = cells.eq(0).text().trim(), name = cells.eq(1).text().trim();
+      const own = current_host_name === name;
+      hsots_text += cells.eq(2).text().trim() + "\t" + name + (own ? "\tablecube" : "") + "\n";
+      hsots_text += cells.eq(4).text().trim() + "\tpn-ablecube" + idx + (own ? "\tpn-ablecube" : "") + "\n";
+      return;
+    }
     // $(this).find('td').eq(0) 순서는 아래와 같습니다.
     // eq(0) : index
     // eq(1) : 호스트 명
@@ -1274,6 +1295,12 @@ function tableToClusterConfigJsonString(radio_value, option, os_type, iscsi_chec
   }
 
   table_tr_obj.each(function(){
+    if ($(this).attr('data-host-role') === 'compute') {
+      const cells = $(this).find('td');
+      resultArrList.push({index: cells.eq(0).text().trim(), hostname: cells.eq(1).text().trim(),
+        ablecube: cells.eq(2).text().trim(), ablecubePn: cells.eq(4).text().trim(), role: 'compute'});
+      return;
+    }
     // $(this).find('td').eq(0) 순서는 아래와 같습니다.
     // eq(0) : index
     // eq(1) : 호스트 명
@@ -1340,7 +1367,7 @@ function ClusterConfigJsonStringGFS(clusterConfig,iscsi_check) {
   var resultArrList = [];
 
   // clusterConfig 객체 안의 hosts 배열 순회
-  clusterConfig.clusterConfig.hosts.forEach(function(host) {
+  clusterConfig.clusterConfig.hosts.filter(host => host.role !== "compute").forEach(function(host) {
     if (iscsi_check == "true") {
       var data = {
         index: host.index,
@@ -1373,7 +1400,7 @@ function ClusterConfigJsonStringHciSharedFile(clusterConfig) {
   var resultArrList = [];
 
   // clusterConfig 객체 안의 hosts 배열 순회
-  clusterConfig.clusterConfig.hosts.forEach(function(host) {
+  clusterConfig.clusterConfig.hosts.filter(host => host.role !== "compute").forEach(function(host) {
     var data = {
       index: host.index,
       hostname: host.hostname,
@@ -1409,6 +1436,7 @@ function ClusterConfigJsonStringHciSharedFile(clusterConfig) {
   }
 
   table_tr_obj.each(function(index_num){
+    const isCompute = $(this).attr('data-host-role') === 'compute';
     // $(this).find('td').eq(0) 순서는 아래와 같습니다.
     // eq(0) : index
     // eq(1) : 호스트 명
@@ -1566,7 +1594,7 @@ function ClusterConfigJsonStringHciSharedFile(clusterConfig) {
         alert("idx " + idx + "번의 호스트 IP 값이 존재하지 않습니다.");
         validate_check = true;
         return false;
-      } else if (scvm_mngt_ip == "" || scvm_mngt_ip == undefined || scvm_mngt_ip == null){
+      } else if (!isCompute && (scvm_mngt_ip == "" || scvm_mngt_ip == undefined || scvm_mngt_ip == null)){
         alert("idx " + idx + "번의 SCVM MNGT IP 값이 존재하지 않습니다.");
         validate_check = true;
         return false;
@@ -1574,11 +1602,11 @@ function ClusterConfigJsonStringHciSharedFile(clusterConfig) {
         alert("idx " + idx + "번의 호스트 PN IP 값이 존재하지 않습니다.");
         validate_check = true;
         return false;
-      } else if (scvm_pn_ip == "" || scvm_pn_ip == undefined || scvm_pn_ip == null){
+      } else if (!isCompute && (scvm_pn_ip == "" || scvm_pn_ip == undefined || scvm_pn_ip == null)){
         alert("idx " + idx + "번의 SCVM PN IP 값이 존재하지 않습니다.");
         validate_check = true;
         return false;
-      } else if (scvm_cn_ip == "" || scvm_cn_ip == undefined || scvm_cn_ip == null){
+      } else if (!isCompute && (scvm_cn_ip == "" || scvm_cn_ip == undefined || scvm_cn_ip == null)){
         alert("idx " + idx + "번의 SCVM CN IP 값이 존재하지 않습니다.");
         validate_check = true;
         return false;
@@ -1604,7 +1632,7 @@ function ClusterConfigJsonStringHciSharedFile(clusterConfig) {
         validate_check = true;
         return false;
       }
-      else if (scvm_mngt_ip_cnt >= 2) { // 다른 idx에 동일 ip가 존재하면 중복으로 처리
+      else if (!isCompute && scvm_mngt_ip_cnt >= 2) { // 다른 idx에 동일 ip가 존재하면 중복으로 처리
         alert("중복된 SCVM MNGT IP가 존재합니다.");
         validate_check = true;
         return false;
@@ -1614,12 +1642,12 @@ function ClusterConfigJsonStringHciSharedFile(clusterConfig) {
         validate_check = true;
         return false;
       }
-      else if (scvm_pn_ip_cnt >= 2) { // 다른 idx에 동일 ip가 존재하면 중복으로 처리
+      else if (!isCompute && scvm_pn_ip_cnt >= 2) { // 다른 idx에 동일 ip가 존재하면 중복으로 처리
         alert("중복된 SCVM PN IP가 존재합니다.");
         validate_check = true;
         return false;
       }
-      else if (scvm_cn_ip_cnt >= 2) { // 다른 idx에 동일 ip가 존재하면 중복으로 처리
+      else if (!isCompute && scvm_cn_ip_cnt >= 2) { // 다른 idx에 동일 ip가 존재하면 중복으로 처리
         alert("중복된 SCVM CN IP가 존재합니다.");
         validate_check = true;
         return false;
@@ -1630,7 +1658,7 @@ function ClusterConfigJsonStringHciSharedFile(clusterConfig) {
         alert("idx " + idx + "번의 호스트 IP 유형이 올바르지 않습니다.");
         validate_check = true;
         return false;
-      } else if (!checkIp(scvm_mngt_ip)){
+      } else if (!isCompute && !checkIp(scvm_mngt_ip)){
         alert("idx " + idx + "번의 SCVM MNGT IP 유형이 올바르지 않습니다.");
         validate_check = true;
         return false;
@@ -1638,11 +1666,11 @@ function ClusterConfigJsonStringHciSharedFile(clusterConfig) {
         alert("idx " + idx + "번의 호스트 PN IP 유형이 올바르지 않습니다.");
         validate_check = true;
         return false;
-      } else if (!checkIp(scvm_pn_ip)){
+      } else if (!isCompute && !checkIp(scvm_pn_ip)){
         alert("idx " + idx + "번의 SCVM PN IP 유형이 올바르지 않습니다.");
         validate_check = true;
         return false;
-      } else if (!checkIp(scvm_cn_ip)){
+      } else if (!isCompute && !checkIp(scvm_cn_ip)){
         alert("idx " + idx + "번의 SCVM CN IP 유형이 올바르지 않습니다.");
         validate_check = true;
         return false;

@@ -68,11 +68,14 @@ os_type = json_data["clusterConfig"]["type"]
 def remove(args):
     try:
         current_hostname = socket.gethostname()
+        if any(h.get("role") == "compute" and h["hostname"] == current_hostname for h in json_data["clusterConfig"]["hosts"]):
+            return createReturn(code=400, val="Use compute node settings removal from an existing HCI host.")
 
         # 다른 cube host에 삭제되는 호스트 정보 삭제
         for f_val in json_data["clusterConfig"]["hosts"]:
             if current_hostname != f_val["hostname"]:
-                cmd = "python3 "+pluginpath + "/python/cluster/cluster_config.py remove -rh "+current_hostname+" -co withScvm"
+                copy_option = "hostOnly" if f_val.get("role") == "compute" else "withScvm"
+                cmd = "python3 "+pluginpath + "/python/cluster/cluster_config.py remove -rh "+current_hostname+" -co "+copy_option
                 ret = json.loads(ssh('-o', 'StrictHostKeyChecking=no', f_val["ablecube"], cmd))
                 if ret["code"] != 200:
                     return createReturn(code=500, val="python3 cluster_config.py remove error : Please check if CUBEs and SCVMs are running.")

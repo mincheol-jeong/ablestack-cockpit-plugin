@@ -9,6 +9,367 @@
 var cur_step_wizard_cluster_config_prepare = "1";
 var option = "";
 let HostProfileData = [];
+function clusterPrepareHasType() {
+  return ['ablestack-hci', 'ablestack-vm', 'ablestack-standalone', 'ablestack-hci-filesystem'].includes($('#selected-cluster-type').val());
+}
+function clusterPrepareTypeNext() {
+  if (cur_step_wizard_cluster_config_prepare === '2') {
+    $('#button-next-step-modal-wizard-cluster-config-prepare').prop('disabled', !clusterPrepareHasType());
+  }
+}
+function collapseClusterConfigReview() {
+  $('#button-accordion-hosts-file').attr('aria-expanded', 'false').removeClass('pf-m-expanded');
+  $('#div-accordion-hosts-file').stop(true, true).attr('hidden', true).hide().removeClass('pf-m-expanded')
+    .closest('.pf-v6-c-accordion__item').removeClass('pf-m-expanded');
+}
+
+var ClusterPrepareLocalHost = (function () {
+  async function read() {
+    const results = await Promise.allSettled([
+      Promise.resolve(cockpit.spawn(['hostname'])),
+      Promise.resolve(cockpit.spawn(['ip', '-j', '-4', 'route', 'get', '1']))
+    ]);
+    const hostname = results[0].status === 'fulfilled' ? results[0].value.trim() : '';
+    let ip = '';
+    if (results[1].status === 'fulfilled') {
+      try { const route = JSON.parse(results[1].value)[0]; ip = route.prefsrc || route.src || ''; }
+      catch (_) { console.log('호스트 관리 IP 자동 조회 실패: 직접 입력하십시오.'); }
+    }
+    return {hostname, ip};
+  }
+  async function fill(row) {
+    const identity = await read();
+    // Fill only the new row and do not overwrite text entered while awaiting ip.
+    if (!row.closest('html').length) return;
+    const name = row.find('td').eq(1), ip = row.find('td').eq(2);
+    if (!name.text().trim()) name.text(identity.hostname);
+    if (!ip.text().trim()) ip.text(identity.ip);
+  }
+  return {read, fill};
+})();
+
+// Compute enrollment shares this wizard's controls, pages and HCI profile table.
+var ClusterConfigCompute = (function () {
+  const root = '#div-modal-wizard-cluster-config-prepare';
+  const next = '#button-next-step-modal-wizard-cluster-config-prepare';
+  const previous = '#button-before-step-modal-wizard-cluster-config-prepare';
+  const table = '#form-table-tbody-cluster-config-existing-host-profile';
+  const pages = ['overview', 'cluster-type', 'ssh-key', 'ip-info', 'time-server', 'review', 'finish'];
+  let entered = false, working = false, completed = false, deploying = false, checked, config, joining, localHostname;
+  let pending = [], savedControls = [], generation = 0;
+  const active = () => entered;
+  const busy = () => working;
+  function errorText(error) {
+    if (typeof error === 'string' && error.trim()) return error;
+    if (error && typeof error.message === 'string' && error.message.trim()) return error.message;
+    if (error && typeof error.problem === 'string' && error.problem.trim()) return error.problem;
+    return '컴퓨팅 노드 작업이 실패했습니다. SSH 접속과 입력한 호스트 IP·HPN IP를 확인하십시오.';
+  }
+
+  function availability() {
+    const hci = $('#selected-cluster-type').val() === 'ablestack-hci';
+    $('label[for="form-radio-cluster-host-add"]').text(hci ? 'HCI 노드 추가' : '노드 추가');
+    $('#cluster-compute-option').prop('hidden', !hci);
+    $('#form-radio-cluster-host-compute').prop('disabled', !hci || working);
+    if (!hci && entered && !working) { leave(); $('#form-radio-cluster-host-new').trigger('click'); }
+  }
+  function message(text, failed = false) {
+    $('#cluster-compute-feedback').prop('hidden', false);
+    $('#cluster-compute-message').text(text || (failed ? errorText(null) : '')).toggleClass('pf-v6-u-danger-color-100', failed).attr('role', failed ? 'alert' : 'status');
+  }
+  function controls() {
+    const locked = working || completed;
+    $(table + ' [data-compute-field]').attr('contenteditable', String(!locked));
+    $('#form-input-cluster-config-hosts-file').prop('disabled', locked);
+    $('#form-radio-cluster-host-new, #form-radio-cluster-host-add').prop('disabled', working || completed);
+    $('#form-radio-hosts-new, #form-radio-ssh-key-new').prop('disabled', true);
+    $('#form-input-cluster-config-host-number, #form-input-cluster-config-host-number-plus, #form-input-cluster-config-host-number-minus').prop('disabled', true);
+    $('#div-modal-wizard-cluster-config-ssh-key input:not(#form-radio-ssh-key-new)').prop('disabled', working);
+    $(root + ' .pf-v6-c-wizard__nav button').prop('disabled', working || deploying);
+    $('#nav-button-cluster-config-finish').prop('disabled', !completed || working);
+    $(next).prop('disabled', working || (cur_step_wizard_cluster_config_prepare === '2' && !clusterPrepareHasType()));
+    $(previous).prop('disabled', working || completed || cur_step_wizard_cluster_config_prepare === '1');
+    $('#button-close-modal-wizard-cluster-config-prepare, #button-cancel-config-modal-wizard-cluster-config-prepare').prop('disabled', working);
+    $(next + ', ' + previous + ', #button-cancel-config-modal-wizard-cluster-config-prepare').toggle(!deploying);
+    $(root).attr('aria-busy', String(working));
+    availability();
+  }
+  async function api(action, payload = {}) {
+    const request = joining ? {action, payload, config,
+      privateKey: $('#div-textarea-cluster-config-temp-existing-ssh-key-pri-file').val()} : payload;
+    const command = joining ? 'join' : action;
+    const process = cockpit.spawn(['python3', pluginpath + '/python/cluster/compute_node.py', command], {superuser: 'require'});
+    if (command !== 'list') process.input(JSON.stringify(request));
+    process.input(null);
+    const result = JSON.parse(await Promise.resolve(process));
+    if (result.code !== 200 && result.code !== 207) throw new Error(String(result.val));
+    return result;
+  }
+  function payload() {
+    const value = {};
+    $(table + ' [data-compute-field]').each(function () { value[this.dataset.computeField] = this.textContent.trim(); });
+    if (!value.hostname || !value.ablecube || !value.ablecubePn) throw new Error('마지막 행의 호스트명, 호스트 IP, 호스트 PN IP(HPN IP)를 모두 입력하십시오.');
+    return value;
+  }
+  function renderProfile() {
+    const tbody = $(table).empty();
+    config.clusterConfig.hosts.forEach(host => {
+      const row = $('<tr>').css('border-bottom', 'solid 1px #dcdcdc');
+      [host.index, host.hostname, host.ablecube, host.scvmMngt, host.ablecubePn, host.scvm, host.scvmCn]
+        .forEach(value => row.append($('<td>').attr('contenteditable', 'false').text(value || '-')));
+      tbody.append(row);
+    });
+    const index = Math.max(0, ...config.clusterConfig.hosts.map(host => Number(host.index) || 0)) + 1;
+    const row = $('<tr>').attr('data-compute-new-row', '').css('border-bottom', 'solid 1px #dcdcdc');
+    [null, 'hostname', 'ablecube', null, 'ablecubePn', null, null].forEach((field, column) => {
+      const cell = $('<td>').attr('contenteditable', field ? 'true' : 'false').text(column === 0 ? index : field ? '' : '-');
+      if (field) cell.attr('data-compute-field', field).attr('aria-label', {hostname: '호스트명', ablecube: '호스트 IP', ablecubePn: 'HPN IP'}[field]);
+      row.append(cell);
+    });
+    tbody.append(row);
+    $('#form-input-cluster-config-host-number').val(config.clusterConfig.hosts.length + 1);
+  }
+  function setExistingFields() {
+    const cluster = config.clusterConfig;
+    const fields = {
+      '#form-input-cluster-ccvm-mngt-ip': cluster.ccvm?.ip,
+      '#form-input-cluster-mngt-nic-cidr': cluster.mngtNic?.cidr,
+      '#form-input-cluster-mngt-nic-gateway': cluster.mngtNic?.gw,
+      '#form-input-cluster-mngt-nic-dns': cluster.mngtNic?.dns,
+      '#form-input-cluster-pcs-hostname1': cluster.pcsCluster?.hostname1,
+      '#form-input-cluster-pcs-hostname2': cluster.pcsCluster?.hostname2,
+      '#form-input-cluster-pcs-hostname3': cluster.pcsCluster?.hostname3,
+      '#form-input-cluster-config-external-time-server-ip': cluster.extenal_timeserver
+    };
+    Object.entries(fields).forEach(([selector, value]) => $(selector).val(value || '').prop('disabled', true));
+    const storageHosts = cluster.hosts.filter(host => host.role !== 'compute');
+    $('#form-input-cluster-config-time-server-ip-1').val(storageHosts[0]?.ablecubePn || '');
+    $('#form-input-cluster-config-time-server-ip-2').val(storageHosts[1]?.ablecubePn || '');
+    $('#form-radio-timeserver-host-num-3').prop('checked', true);
+    $('#div-modal-wizard-cluster-config-time-server input').prop('disabled', true);
+  }
+  async function readProfile(file) {
+    if (!entered || working || !file) return;
+    const token = ++generation;
+    checked = undefined; config = undefined; pending = [];
+    working = true; controls(); message('기존 클러스터 구성 파일을 읽고 있습니다.');
+    try {
+      const uploaded = JSON.parse(await file.text());
+      if (uploaded?.clusterConfig?.type !== 'ablestack-hci' || !uploaded.clusterConfig.hosts?.length) throw new Error('기존 HCI 클러스터의 cluster.json을 선택하십시오.');
+      const identity = await ClusterPrepareLocalHost.read();
+      const hostname = identity.hostname;
+      if (!hostname) throw new Error('현재 호스트명을 조회하지 못했습니다.');
+      await clusterConfigProfile('ablestack-hci', 'reset');
+      if (token !== generation || !entered) return;
+      config = uploaded;
+      localHostname = hostname;
+      const local = config.clusterConfig.hosts.find(host => host.hostname.split('.')[0].toLowerCase() === hostname.split('.')[0].toLowerCase());
+      joining = !local || local.role === 'compute';
+      renderProfile(); setExistingFields();
+      $(table + ' [data-compute-field="hostname"]').text(identity.hostname);
+      $(table + ' [data-compute-field="ablecube"]').text(identity.ip);
+      message('기존 파일을 불러왔습니다. 마지막 행에 컴퓨팅 노드 정보를 입력하십시오.');
+    } catch (error) {
+      $(table).empty(); message(errorText(error), true);
+    } finally { working = false; if (entered) controls(); }
+  }
+  function enter() {
+    if (working) return;
+    if (!entered) {
+      savedControls = [];
+      $(root + ' input, ' + root + ' button').each(function () { savedControls.push([this, this.disabled]); });
+      entered = true;
+      $('#form-radio-hosts-file').trigger('click');
+    }
+    $('#form-radio-cluster-host-compute, #form-radio-ssh-key-file').prop('checked', true);
+    $('#cluster-compute-feedback').prop('hidden', false);
+    checked = undefined; completed = false;
+    message('기존 HCI 클러스터의 cluster.json을 선택하십시오.');
+    controls();
+  }
+  function leave() {
+    if (working || !entered) return;
+    entered = false; generation++;
+    savedControls.forEach(([element, disabled]) => { element.disabled = disabled; });
+    savedControls = [];
+    $('#cluster-compute-feedback, #cluster-compute-config-review').prop('hidden', true);
+    $('#cluster-compute-message').empty();
+    $('#form-radio-cluster-host-compute').prop('checked', false);
+    $(root).attr('aria-busy', 'false');
+    config = undefined; checked = undefined; completed = false; deploying = false; pending = []; joining = false;
+    $(next + ', ' + previous + ', #button-cancel-config-modal-wizard-cluster-config-prepare').show();
+    availability();
+  }
+  function review() {
+    putSshKeyValueIntoTextarea('existing');
+    reviewProfile();
+    collapseClusterConfigReview();
+    $('#div-accordion-cluster-type-type').text('ABLESTACK HCI');
+    [['ccvm-mngt-ip', 'form-input-cluster-ccvm-mngt-ip'], ['mngt-nic-cidr', 'form-input-cluster-mngt-nic-cidr'], ['mngt-nic-gw', 'form-input-cluster-mngt-nic-gateway'], ['mngt-nic-dns', 'form-input-cluster-mngt-nic-dns'], ['pcs-hostname1', 'form-input-cluster-pcs-hostname1'], ['pcs-hostname2', 'form-input-cluster-pcs-hostname2'], ['pcs-hostname3', 'form-input-cluster-pcs-hostname3']]
+      .forEach(([output, input]) => $('#div-cluster-' + output).text($('#' + input).val()));
+    putTimeServerValueIntoTextarea($('input[name=radio-timeserver]:checked').val());
+  }
+  function reviewProfile() {
+    if (!checked || !config || completed) return;
+    const node = checked.node;
+    const existing = config.clusterConfig.hosts.findIndex(host => host.hostname.split('.')[0].toLowerCase() === node.hostname.split('.')[0].toLowerCase());
+    const hosts = [...config.clusterConfig.hosts];
+    if (existing < 0) hosts.push(node); else hosts[existing] = node;
+    const desired = {...config, clusterConfig: {...config.clusterConfig, hosts}};
+    $('#div-textarea-cluster-config-confirm-json-conf').val(JSON.stringify(desired, null, 2));
+    $('#span-hosts-file').text('기존 파일 사용 · 컴퓨팅 노드 1대 ' + (existing < 0 ? '추가' : '갱신'));
+    $('#cluster-compute-config-review').prop('hidden', false);
+    $('#cluster-compute-config-change').text('hosts: ' + config.clusterConfig.hosts.length + '대 → ' + desired.clusterConfig.hosts.length + '대 / ' + (existing < 0 ? '추가' : '갱신') + ' 노드 #' + node.index + ' ' + node.hostname + ' (role: compute)');
+    $('#cluster-compute-config-json').val(JSON.stringify(desired, null, 2));
+    const lines = [];
+    const entry = (ip, aliases) => { if (ip) lines.push([ip, ...aliases].join('\t')); };
+    desired.clusterConfig.hosts.forEach(host => {
+      const own = host.hostname.split('.')[0].toLowerCase() === localHostname.split('.')[0].toLowerCase();
+      entry(host.ablecube, [host.hostname, ...(own ? ['ablecube'] : [])]);
+      entry(host.ablecubePn, ['pn-ablecube' + host.index, ...(own ? ['pn-ablecube'] : [])]);
+      if (host.role !== 'compute') {
+        entry(host.scvmMngt, ['scvm' + host.index + '-mngt', ...(own ? ['scvm-mngt'] : [])]);
+        entry(host.scvm, ['scvm' + host.index, ...(own ? ['scvm'] : [])]);
+        entry(host.scvmCn, ['cn-scvm' + host.index, ...(own ? ['cn-scvm'] : [])]);
+      }
+    });
+    entry(desired.clusterConfig.ccvm?.ip, ['ccvm-mngt', 'ccvm']);
+    entry(desired.clusterConfig.gwvm?.ip, ['gwvm-mngt']);
+    entry(desired.clusterConfig.gwvm?.pn, ['gwvm']);
+    $('#div-textarea-cluster-config-confirm-hosts-file').val(lines.join('\n'));
+  }
+  function go(step) {
+    if (!entered || working || (completed && step !== 7) || (step === 7 && !completed)) return;
+    if ((step === 5 || step === 6) && !checked) { go(4); prepareReview(step); return; }
+    deploying = false;
+    resetClusterConfigWizard();
+    cur_step_wizard_cluster_config_prepare = String(step);
+    $('#div-modal-wizard-cluster-config-' + pages[step - 1]).show();
+    $('#nav-button-cluster-config-' + pages[step - 1]).addClass('pf-m-current');
+    $(next).text(step === 6 ? '완료' : step === 7 ? '종료' : '다음');
+    if (step === 6) review();
+    controls();
+  }
+  async function refreshPending() {
+    const result = await api('list');
+    pending = result.val.operations;
+  }
+  function prepareReview(step = 5) {
+    if (working || completed) return;
+    let value;
+    try { if (!config) throw new Error('기존 HCI cluster.json을 먼저 선택하십시오.'); value = payload(); }
+    catch (error) { message(errorText(error), true); return; }
+    // Navigation only prepares the review. Host changes and remote checks belong
+    // to the final execution page, as in the existing cluster preparation flow.
+    const existing = config.clusterConfig.hosts.find(host => host.role === 'compute' && host.hostname.split('.')[0].toLowerCase() === value.hostname.split('.')[0].toLowerCase());
+    const index = existing ? existing.index : Math.max(0, ...config.clusterConfig.hosts.map(host => Number(host.index) || 0)) + 1;
+    checked = {value, node: {index: String(index), hostname: value.hostname, ablecube: value.ablecube, ablecubePn: value.ablecubePn, role: 'compute'}};
+    message('입력 내용을 확인했습니다. SSH 키 적용과 클러스터 접속 검사는 마지막 완료 실행 시 진행합니다.');
+    go(step);
+  }
+  async function prepareExecution() {
+    console.log('컴퓨팅 노드 추가: SSH 키 적용');
+    if (joining) {
+      const privateKey = $('#div-textarea-cluster-config-temp-existing-ssh-key-pri-file').val().trim();
+      const publicKey = $('#div-textarea-cluster-config-temp-existing-ssh-key-pub-file').val().trim();
+      if (privateKey || publicKey) {
+        if (!privateKey || !publicKey) throw new Error('SSH Key 파일 단계에서 기존 개인키와 공개키를 모두 선택하십시오.');
+        await writeSshKeyFile(privateKey, publicKey, true);
+      }
+    }
+    console.log('컴퓨팅 노드 추가: HCI 기준 호스트의 진행 중인 작업 확인');
+    await refreshPending();
+    if (pending.length) {
+      const operation = pending[0];
+      const value = checked.value;
+      if (pending.length === 1 && operation.action === 'add'
+          && operation.node.hostname.toLowerCase() === value.hostname.toLowerCase()
+          && operation.node.ablecube === value.ablecube && operation.node.ablecubePn === value.ablecubePn) {
+        console.log('컴퓨팅 노드 추가: 동일 노드의 이전 미완료 작업을 처음부터 다시 실행합니다.');
+        return operation.id;
+      }
+      throw new Error('다른 노드 또는 다른 설정의 미완료 작업이 남아 있습니다: ' + pending.map(item => item.node.hostname).join(', ') + '. 기존 작업의 호스트명·호스트 IP·HPN IP를 확인하십시오.');
+    }
+  }
+  async function execute(id) {
+    if (working || completed) return;
+    if (!id) {
+      try {
+        if (!checked || JSON.stringify(payload()) !== JSON.stringify(checked.value)) throw new Error('입력이 변경되었습니다. 클러스터 구성 파일 단계에서 다시 확인하십시오.');
+      } catch (error) { checked = undefined; go(4); message(errorText(error), true); return; }
+    }
+    deploying = true; working = true; controls();
+    resetClusterConfigWizard(); $('#div-modal-wizard-cluster-config-deploy').show();
+    setClusterProgressStep('span-cluster-progress-step1', 1);
+    let failureStep = 1;
+    try {
+      if (!id) id = await prepareExecution();
+      setClusterProgressStep('span-cluster-progress-step1', 2);
+      setClusterProgressStep('span-cluster-progress-step2', 1);
+      failureStep = 2;
+      console.log(id ? '컴퓨팅 노드 추가: SSH·Ceph 준비부터 전체 다시 실행' : '컴퓨팅 노드 추가: SSH·Ceph 검사 및 노드 추가 실행');
+      const result = await api(id ? 'retry' : 'add', id ? {id} : checked.value);
+      if (result.code === 207) {
+        const failure = (result.val.errors || []).map(error => error.step + ': ' + errorText(error)).join('\n') || errorText(null);
+        pending = [result.val];
+        executionFailure(failure, failureStep);
+      } else {
+        completed = true; pending = []; working = false;
+        ['1', '2', '3'].forEach(number => setClusterProgressStep('span-cluster-progress-step' + number, 2));
+        try { $('#div-textarea-cluster-config-confirm-json-conf').val(await cockpit.file(pluginpath + '/tools/properties/cluster.json').read()); }
+        catch (_) { $('#div-textarea-cluster-config-confirm-json-conf').val(''); console.log('구성 파일 다운로드는 호스트에서 다시 확인하십시오.'); }
+        go(7);
+      }
+    } catch (error) {
+      executionFailure(errorText(error), failureStep);
+    } finally { working = false; controls(); }
+  }
+  function executionFailure(failure, step) {
+    setClusterProgressFail(step);
+    console.log('컴퓨팅 노드 추가 실행 실패: ' + failure);
+    alert('컴퓨팅 노드 추가 실행 실패: ' + failure);
+  }
+  function nextStep() {
+    const step = Number(cur_step_wizard_cluster_config_prepare);
+    if (working) return;
+    if (step === 2 && !clusterPrepareHasType()) return;
+    if (step === 4) prepareReview();
+    else if (step === 6) execute();
+    else if (step === 7) { leave(); resetClusterConfigWizardWithData(); $(root).hide(); }
+    else go(step + 1);
+  }
+  function previousStep() { go(Math.max(1, Number(cur_step_wizard_cluster_config_prepare) - 1)); }
+  function open() {
+    if (working) return;
+    $(root).show();
+    if (entered) { go(4); return; }
+    $('#selected-cluster-type').val('ablestack-hci');
+    $('[name="cluster-config-cluster-type-card"]').removeClass('is-selected').find('i').removeClass('fa-check');
+    $('[name="cluster-config-cluster-type-card"][value="ablestack-hci"]').addClass('is-selected').find('i').addClass('fa-check');
+    clusterconfigscreenConversion(); enter(); go(3);
+  }
+  $(document).ready(function () {
+    $('#form-radio-cluster-host-compute').on('click', enter);
+    $('#form-radio-hosts-file').on('click.compute', () => {
+      if (!entered || working) return;
+      generation++; config = undefined; checked = undefined; pending = [];
+      message('기존 HCI 클러스터의 cluster.json을 선택하십시오.');
+    });
+    $('#form-input-cluster-config-hosts-file').on('change.compute', function () {
+      if (!entered || working) return;
+      checked = undefined; config = undefined; pending = [];
+      $(table).empty();
+      if (this.files.length) readProfile(this.files[0]);
+      else message('기존 HCI 클러스터의 cluster.json을 선택하십시오.');
+    });
+    $(table).on('input', '[data-compute-field]', () => { checked = undefined; });
+    $('#form-input-cluster-config-ssh-key-pri-file, #form-input-cluster-config-ssh-key-pub-file').on('change.compute', () => { checked = undefined; });
+    $('[name="cluster-config-cluster-type-card"]').on('click.compute', availability);
+    $('#selected-cluster-type').on('change.compute', availability);
+    availability();
+  });
+  return {active, busy, enter, leave, go, next: nextStep, previous: previousStep, open, reviewProfile};
+})();
 
 // Document.ready 시작
 $(document).ready(function () {
@@ -37,6 +398,7 @@ $(document).ready(function () {
   checkHostName(option);
 });
 
+$('#selected-cluster-type').on('change.clusterTypeNext', clusterPrepareTypeNext);
 $('[name="cluster-config-cluster-type-card"]').click(function() {
   var $clickedButton = $(this);
 
@@ -46,7 +408,7 @@ $('[name="cluster-config-cluster-type-card"]').click(function() {
     $clickedButton.find('i').removeClass('fa-check');
 
     // 선택이 취소되었으므로 숨겨진 입력을 재설정합니다.
-    $('#selected-cluster-type').val('');
+    $('#selected-cluster-type').val('').trigger('change');
 
   } else {
     // 다른 모든 버튼의 선택을 해제합니다.
@@ -60,18 +422,20 @@ $('[name="cluster-config-cluster-type-card"]').click(function() {
 
     // 선택된 값을 숨겨진 입력으로 설정
     var selectedValue = $clickedButton.val();
-    $('#selected-cluster-type').val(selectedValue);
+    $('#selected-cluster-type').val(selectedValue).trigger('change');
 
   }
 });
 
 // 타이틀 닫기 버튼 이벤트 처리
 $('#button-close-modal-wizard-cluster-config-prepare').on('click', function () {
+  if (window.ClusterConfigCompute && ClusterConfigCompute.busy()) return;
   $('#div-modal-wizard-cluster-config-prepare').hide();
 });
 
 /* 마법사 사이드 메뉴 버튼 클릭 이벤트 처리 시작 */
 $('#nav-button-cluster-config-overview').on('click', function () {
+  if (window.ClusterConfigCompute && ClusterConfigCompute.active()) { ClusterConfigCompute.go(1); return; }
   resetClusterConfigWizard();
 
   $('#div-modal-wizard-cluster-config-overview').show();
@@ -83,6 +447,7 @@ $('#nav-button-cluster-config-overview').on('click', function () {
   cur_step_wizard_cluster_config_prepare = "1";
 });
 $('#nav-button-cluster-config-cluster-type').on('click', function () {
+  if (window.ClusterConfigCompute && ClusterConfigCompute.active()) { ClusterConfigCompute.go(2); return; }
   resetClusterConfigWizard();
 
   $('#div-modal-wizard-cluster-config-cluster-type').show();
@@ -92,8 +457,10 @@ $('#nav-button-cluster-config-cluster-type').on('click', function () {
   $('#button-before-step-modal-wizard-cluster-config-prepare').attr('disabled', false);
 
   cur_step_wizard_cluster_config_prepare = "2";
+  clusterPrepareTypeNext();
 });
 $('#nav-button-cluster-config-ssh-key').on('click', function () {
+  if (window.ClusterConfigCompute && ClusterConfigCompute.active()) { ClusterConfigCompute.go(3); return; }
   resetClusterConfigWizard();
 
   $('#div-modal-wizard-cluster-config-ssh-key').show();
@@ -106,6 +473,7 @@ $('#nav-button-cluster-config-ssh-key').on('click', function () {
 });
 
 $('#nav-button-cluster-config-ip-info').on('click', function () {
+  if (window.ClusterConfigCompute && ClusterConfigCompute.active()) { ClusterConfigCompute.go(4); return; }
   resetClusterConfigWizard();
 
   $('#div-modal-wizard-cluster-config-ip-info').show();
@@ -126,6 +494,7 @@ $('#nav-button-cluster-config-ip-info').on('click', function () {
 });
 
 $('#nav-button-cluster-config-time-server').on('click', function () {
+  if (window.ClusterConfigCompute && ClusterConfigCompute.active()) { ClusterConfigCompute.go(5); return; }
   resetClusterConfigWizard();
 
 
@@ -144,6 +513,7 @@ $('#nav-button-cluster-config-time-server').on('click', function () {
 });
 
 $('#nav-button-cluster-config-review').on('click', function () {
+  if (window.ClusterConfigCompute && ClusterConfigCompute.active()) { ClusterConfigCompute.go(6); return; }
   resetClusterConfigWizard();
 
   $('#div-modal-wizard-cluster-config-review').show();
@@ -154,6 +524,7 @@ $('#nav-button-cluster-config-review').on('click', function () {
 
   $('#button-next-step-modal-wizard-cluster-config-prepare').html('완료');
   cur_step_wizard_cluster_config_prepare = "6";
+    collapseClusterConfigReview();
 
   // 변경된 키 내용을 설정 확인에 반영
   let ssh_key_type = $('input[name=radio-ssh-key]:checked').val();
@@ -178,6 +549,7 @@ $('#nav-button-cluster-config-review').on('click', function () {
 });
 
 $('#nav-button-cluster-config-finish').on('click', function () {
+  if (window.ClusterConfigCompute && ClusterConfigCompute.active()) { ClusterConfigCompute.go(7); return; }
   resetClusterConfigWizard();
 
   $('#div-modal-wizard-cluster-config-finish').show();
@@ -208,6 +580,8 @@ $('#nav-button-cluster-config-finish').on('click', function () {
 /* 마법사 Footer 영역의 버튼 클릭 이벤트 처리 시작 */
 
 $('#button-next-step-modal-wizard-cluster-config-prepare').on('click', function () {
+  if (cur_step_wizard_cluster_config_prepare === '2' && !clusterPrepareHasType()) return;
+  if (window.ClusterConfigCompute && ClusterConfigCompute.active()) { ClusterConfigCompute.next(); return; }
   resetClusterConfigWizard();
   if (cur_step_wizard_cluster_config_prepare == "1"){
     $('#div-modal-wizard-cluster-config-cluster-type').show();
@@ -217,6 +591,7 @@ $('#button-next-step-modal-wizard-cluster-config-prepare').on('click', function 
     $('#button-before-step-modal-wizard-cluster-config-prepare').attr('disabled', false);
 
     cur_step_wizard_cluster_config_prepare = "2";
+    clusterPrepareTypeNext();
 
   } else if (cur_step_wizard_cluster_config_prepare == "2") {
 
@@ -322,6 +697,7 @@ $('#button-next-step-modal-wizard-cluster-config-prepare').on('click', function 
 
     $('#button-next-step-modal-wizard-cluster-config-prepare').html('완료');
     cur_step_wizard_cluster_config_prepare = "6";
+    collapseClusterConfigReview();
 
     // 변경된 키 내용을 설정 확인에 반영
     let ssh_key_type = $('input[name=radio-ssh-key]:checked').val();
@@ -451,7 +827,7 @@ $('#button-next-step-modal-wizard-cluster-config-prepare').on('click', function 
             console.log(":::Please check the cluster.json file.::: "+ data);
           });
         }
-        // 추가 호스트일때
+        // 노드 추가일때
         else if(cluster_host_yn == "add"){
           let all_host_name = host_names.join(" ");
           var exclude_hostname = $('#form-input-current-host-name').val();
@@ -637,6 +1013,7 @@ $('#button-next-step-modal-wizard-cluster-config-prepare').on('click', function 
 
 
 $('#button-before-step-modal-wizard-cluster-config-prepare').on('click', function () {
+  if (window.ClusterConfigCompute && ClusterConfigCompute.active()) { ClusterConfigCompute.previous(); return; }
   resetClusterConfigWizard();
 
   if (cur_step_wizard_cluster_config_prepare == "2") {
@@ -655,6 +1032,7 @@ $('#button-before-step-modal-wizard-cluster-config-prepare').on('click', functio
     $('#button-before-step-modal-wizard-cluster-config-prepare').attr('disabled', false);
 
     cur_step_wizard_cluster_config_prepare = "2";
+    clusterPrepareTypeNext();
   }else if (cur_step_wizard_cluster_config_prepare == "4") {
     $('#div-modal-wizard-cluster-config-ssh-key').show();
     $('#nav-button-cluster-config-ssh-key').addClass('pf-m-current');
@@ -691,6 +1069,7 @@ $('#button-before-step-modal-wizard-cluster-config-prepare').on('click', functio
 
     $('#nav-button-cluster-config-finish').addClass('pf-m-disabled');
     cur_step_wizard_cluster_config_prepare = "6";
+    collapseClusterConfigReview();
   }
 });
 
@@ -784,6 +1163,7 @@ $('#form-radio-hosts-file').on('click', function () {
 });
 
 $('#form-radio-cluster-host-new').on('click', function () {
+  if (window.ClusterConfigCompute) ClusterConfigCompute.leave();
   $('#form-radio-hosts-new').attr('disabled', false);
   if ($('#selected-cluster-type').val() == "ablestack-vm"){
     $('[name="cluster-config-ccvm-info"]').show();
@@ -797,6 +1177,7 @@ $('#form-radio-cluster-host-new').on('click', function () {
 });
 
 $('#form-radio-cluster-host-add').on('click', function () {
+  if (window.ClusterConfigCompute) ClusterConfigCompute.leave();
   $('#form-radio-hosts-new').attr('disabled', true);
   if ($('#selected-cluster-type').val() == "ablestack-vm"){
     $('[name="cluster-config-ccvm-info"]').hide();
@@ -1011,7 +1392,7 @@ $('#form-input-cluster-config-hosts-file').on('click', function () {
   let hosts_input = document.querySelector('#form-input-cluster-config-hosts-file');
   let file_type = "cluster.json";
   var os_type = $("#selected-cluster-type").val();
-  fileReaderIntoTableFunc(hosts_input, file_type, option,os_type);
+  if (!ClusterConfigCompute.active()) fileReaderIntoTableFunc(hosts_input, file_type, option,os_type);
   $('#form-input-cluster-config-hosts-file').val("")
 });
 // Hosts 기존 파일 선택 시, 파일 선택 취소 시 table 초기화
@@ -1029,6 +1410,7 @@ $('#button-accordion-ssh-key').on('click change', function () {
 });
 // hosts 파일 준비 방식에 따라 내용 보여주기
 $('#button-accordion-hosts-file').on('click change', function () {
+  if (window.ClusterConfigCompute && ClusterConfigCompute.active()) { ClusterConfigCompute.reviewProfile(); return; }
   let hosts_file_type = $('input[name=radio-hosts-file]:checked').val();
   var os_type = $('#selected-cluster-type').val();
 
@@ -1101,6 +1483,7 @@ function createClusterJsonLink(){
 
 // 마법사 "취소 버튼 모달창" show, hide
 $('#button-cancel-config-modal-wizard-cluster-config-prepare').on('click', function () {
+  if (window.ClusterConfigCompute && ClusterConfigCompute.busy()) return;
   $('#div-modal-cancel-cluster-config-prepare-cancel').show();
 });
 $('#button-close-modal-cluster-config-prepare-cancel').on('click', function () {
@@ -1161,6 +1544,7 @@ function resetClusterConfigWizard() {
  * History : 2021.03.30 최초 작성
  **/
 async function resetClusterConfigWizardWithData() {
+  if (window.ClusterConfigCompute) ClusterConfigCompute.leave();
 
   // 입력된 모든 데이터를 초기화한다.
   $('#nav-button-cluster-config-overview').addClass('pf-m-current');
@@ -1205,7 +1589,7 @@ async function resetClusterConfigWizardWithData() {
   $('#form-input-cluster-config-host-number').removeAttr('disabled');
 
   // 클러스터 종류
-  $('#selected-cluster-type').val("");
+  $('#selected-cluster-type').val("").trigger('change');
   $('[name="cluster-config-cluster-type-card"]').removeClass('is-selected').each(function() {
     $(this).find('i').removeClass('fa-check');
   });
@@ -1478,7 +1862,7 @@ function saveAsFile(id, str, filename) {
  * History : 2025.07.29 코드가 정상 실행되지 않아 동기화 코드로 변경
  **/
 
-async function writeSshKeyFile(text1, text2) {
+async function writeSshKeyFile(text1, text2, throwOnError = false) {
   try {
     await cockpit.script("mkdir -p /root/.ssh && touch /root/.ssh/id_rsa");
     await cockpit.file("/root/.ssh/id_rsa").replace(text1);
@@ -1498,6 +1882,7 @@ async function writeSshKeyFile(text1, text2) {
 
   } catch (err) {
     console.error("SSH 키 처리 중 오류 발생:", err);
+    if (throwOnError) throw err;
   }
 }
 

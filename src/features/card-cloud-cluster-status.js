@@ -275,10 +275,10 @@ $('#button-execution-modal-monitoring-config-update').on('click', function(){
           prometheus_config_cmd.push(config_json.clusterConfig.hosts[i].ablecube);
         }
 
-        prometheus_config_cmd.push('--scvm');
-        for(var i = 0 ; i < config_json.clusterConfig.hosts.length ; i ++ ){
-          prometheus_config_cmd.push(config_json.clusterConfig.hosts[i].scvmMngt);
-        }
+        const scvmIps = config_json.clusterConfig.hosts
+          .filter(host => host.role !== 'compute' && host.scvmMngt)
+          .map(host => host.scvmMngt);
+        if (scvmIps.length) prometheus_config_cmd.push('--scvm', ...scvmIps);
 
         if (console_log) { console.log(prometheus_config_cmd); }
         cockpit.spawn(prometheus_config_cmd, { host: ccvm_ip })
@@ -660,12 +660,12 @@ $('#cloud-cluster-connect').on('click', function(){
 });
 
 // 클라우드 센터 클러스터 상태 조회 및 조회 결과값으로 화면 변경하는 함수
-function CardCloudClusterStatus(){
+function CardCloudClusterStatus(readHost){
   return new Promise((resolve) => {
     var usesInfrastructureClusterCard = os_type == "ablestack-hci"
       || os_type == "ablestack-vm"
       || os_type == "ablestack-hci-filesystem";
-    $('#card-storage-cluster-status-title').text(usesInfrastructureClusterCard ? '인프라 클러스터 상태' : '인프라 클러스터 상태');
+    $('#card-cloud-cluster-status-title').text('인프라 클러스터 상태');
     $('#cccs-resource-status-group').toggle(!usesInfrastructureClusterCard);
     $('#cccs-current-dc-group').toggle(usesInfrastructureClusterCard);
     $('#cccs-execution-node-title').text(usesInfrastructureClusterCard ? 'CCVM 실행 노드' : 'VM실행노드');
@@ -678,7 +678,7 @@ function CardCloudClusterStatus(){
     var statusAction = usesInfrastructureClusterCard ? 'infrastructureDetail' : 'pcsDetail';
     cockpit.spawn(['/usr/bin/python3', pluginpath + '/python/cloud_cluster_status/card-cloud-cluster-status.py', statusAction ], { host: pcs_exe_host})
     .then(function(data){
-      cockpit.spawn(['/usr/bin/python3', pluginpath + '/python/ablestack_json/ablestackJson.py', 'status', '--depth1', 'bootstrap', '--depth2', 'ccvm' ])
+      cockpit.spawn(['/usr/bin/python3', pluginpath + '/python/ablestack_json/ablestackJson.py', 'status', '--depth1', 'bootstrap', '--depth2', 'ccvm' ], readHost ? {host: readHost} : undefined)
         .then(function (bootstrap_data){
           console.log("ablestackJson.py : "+bootstrap_data);
           var retVal = JSON.parse(bootstrap_data);
@@ -699,7 +699,7 @@ function CardCloudClusterStatus(){
         console.log('ClusterStatusInfo spawn error(ablestackJson.py');
 
       });
-      cockpit.spawn(['/usr/bin/python3', pluginpath + '/python/ablestack_json/ablestackJson.py', 'status', '--depth1', 'monitoring', '--depth2', 'wall' ])
+      cockpit.spawn(['/usr/bin/python3', pluginpath + '/python/ablestack_json/ablestackJson.py', 'status', '--depth1', 'monitoring', '--depth2', 'wall' ], readHost ? {host: readHost} : undefined)
         .then(function (monitoring_data){
           console.log("ablestackJson.py : "+monitoring_data);
           var retVal = JSON.parse(monitoring_data);

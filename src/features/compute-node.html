@@ -1,0 +1,63 @@
+<div class="pf-v6-l-bullseye compute-node-backdrop-layout">
+  <div class="pf-v6-c-modal-box pf-m-lg compute-node-modal" role="dialog" aria-modal="true" aria-labelledby="compute-node-title" aria-describedby="compute-node-description" tabindex="-1">
+    <div class="pf-v6-c-modal-box__close"><button class="pf-v6-c-button pf-m-plain compute-node-close" type="button" aria-label="닫기"><i class="fas fa-times" aria-hidden="true"></i></button></div>
+    <header class="pf-v6-c-modal-box__header compute-node-header">
+      <span class="compute-node-title-icon"><i class="fas fa-server" aria-hidden="true"></i></span>
+      <div>
+        <h1 class="pf-v6-c-modal-box__title" id="compute-node-title">컴퓨팅 노드 설정 제거</h1>
+        <p class="compute-node-subtitle" id="compute-node-description"></p>
+      </div>
+    </header>
+    <div class="pf-v6-c-modal-box__body compute-node-body">
+      <div class="compute-node-guide" id="compute-node-add-guide">
+        <i class="fas fa-info-circle" aria-hidden="true"></i>
+        <div><strong>시작 전 준비</strong><p>관리망과 HPN IP를 미리 설정하고, 기존 클러스터 키로 SSH 접속이 가능해야 합니다. 기존 호스트와 새 호스트에 컴퓨팅 노드 지원 버전을 설치해 주세요.</p></div>
+      </div>
+      <form id="compute-node-form" class="pf-v6-c-form" novalidate>
+        <div id="compute-node-add-fields" class="compute-node-fields">
+          <div class="compute-node-field">
+            <label class="pf-v6-c-form__label" for="compute-node-hostname">호스트명 <span class="pf-v6-c-form__label-required" aria-hidden="true">*</span></label>
+            <div><span class="pf-v6-c-form-control"><input id="compute-node-hostname" type="text" autocomplete="off" spellcheck="false" placeholder="예: ablecube-compute-1" required aria-describedby="compute-node-hostname-help" /></span><p class="compute-node-helper" id="compute-node-hostname-help">추가할 호스트에 설정된 이름을 입력합니다.</p></div>
+          </div>
+          <div class="compute-node-field">
+            <label class="pf-v6-c-form__label" for="compute-node-ip">호스트 IP <span class="pf-v6-c-form__label-required" aria-hidden="true">*</span></label>
+            <div><span class="pf-v6-c-form-control"><input id="compute-node-ip" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="예: 10.10.22.4" required aria-describedby="compute-node-ip-help" /></span><p class="compute-node-helper" id="compute-node-ip-help">SSH 접속에 사용할 관리망 IP입니다.</p></div>
+          </div>
+          <div class="compute-node-field">
+            <label class="pf-v6-c-form__label" for="compute-node-hpn">HPN IP <span class="pf-v6-c-form__label-required" aria-hidden="true">*</span></label>
+            <div><span class="pf-v6-c-form-control"><input id="compute-node-hpn" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="예: 100.100.22.4" required aria-describedby="compute-node-hpn-help" /></span><p class="compute-node-helper" id="compute-node-hpn-help">기존 SCVM과 통신할 스토리지망 IP입니다.</p></div>
+          </div>
+        </div>
+        <div id="compute-node-remove-fields" class="compute-node-fields" hidden>
+          <p class="compute-node-helper">Mold에서 호스트를 직접 제거한 뒤 진행하십시오. 대상 노드의 클러스터 SSH 키, cluster.json, /etc/hosts, 구성 완료 상태와 추가 시 적용한 nwfilter·bridge 설정을 초기화합니다.</p>
+          <div class="compute-node-field">
+            <label class="pf-v6-c-form__label" for="compute-node-target">호스트명</label>
+            <div><span class="pf-v6-c-form-control"><select id="compute-node-target" aria-describedby="compute-node-target-info"></select><span class="pf-v6-c-form-control__utilities" aria-hidden="true"><span class="pf-v6-c-form-control__toggle-icon"><i class="fas fa-caret-down"></i></span></span></span><p id="compute-node-target-info" class="compute-node-helper"></p></div>
+          </div>
+          <dl class="compute-node-target-details" aria-label="제거 대상 정보">
+            <div><dt>호스트명</dt><dd id="compute-node-selected-hostname">-</dd></div>
+            <div><dt>호스트 IP</dt><dd id="compute-node-selected-ip">-</dd></div>
+            <div><dt>HPN IP</dt><dd id="compute-node-selected-hpn">-</dd></div>
+          </dl>
+          <fieldset class="compute-node-confirmations">
+            <legend>제거 전 확인</legend>
+            <label class="pf-v6-c-check" for="compute-node-mold-released"><input class="pf-v6-c-check__input" id="compute-node-mold-released" type="checkbox" /><span class="pf-v6-c-check__label">Mold에서 VM과 호스트 정리를 완료했습니다.</span><span class="pf-v6-c-check__description">신규 배치를 중지하고 VM 이전·로컬 디스크 정리 후 호스트 등록을 해제해야 합니다.</span></label>
+          </fieldset>
+
+        </div>
+        <section id="compute-node-review" class="compute-node-review" aria-label="실행 대상 확인" hidden></section>
+      </form>
+      <div id="compute-node-pending" class="compute-node-pending"></div>
+      <div id="compute-node-status" class="pf-v6-c-alert pf-m-inline pf-m-info compute-node-status" role="status" aria-live="polite" aria-atomic="true">
+        <div class="pf-v6-c-alert__icon"><i id="compute-node-status-icon" class="fas fa-info-circle" aria-hidden="true"></i></div>
+        <p class="pf-v6-c-alert__title" id="compute-node-status-title">진행 안내</p>
+        <div class="pf-v6-c-alert__description" id="compute-node-feedback"></div>
+      </div>
+    </div>
+    <footer class="pf-v6-c-modal-box__footer compute-node-footer">
+      <button id="compute-node-check" class="pf-v6-c-button pf-m-primary" type="button" disabled><span id="compute-node-check-progress" class="pf-v6-c-button__progress" hidden><svg id="compute-node-spinner" class="pf-v6-c-spinner pf-m-sm" role="progressbar" aria-label="처리 중" viewBox="0 0 100 100"><circle class="pf-v6-c-spinner__path" cx="50" cy="50" r="45" fill="none"></circle></svg></span><span id="compute-node-check-label">사전 확인</span></button>
+      <button id="compute-node-execute" class="pf-v6-c-button pf-m-secondary" type="button" disabled><span id="compute-node-execute-progress" class="pf-v6-c-button__progress" hidden><svg id="compute-node-execute-spinner" class="pf-v6-c-spinner pf-m-sm" role="progressbar" aria-label="설정 제거 중" viewBox="0 0 100 100"><circle class="pf-v6-c-spinner__path" cx="50" cy="50" r="45" fill="none"></circle></svg></span><span id="compute-node-execute-label">설정 제거 실행</span></button>
+      <button class="pf-v6-c-button pf-m-link compute-node-close" type="button">닫기</button>
+    </footer>
+  </div>
+</div>

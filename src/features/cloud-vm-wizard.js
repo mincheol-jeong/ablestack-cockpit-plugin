@@ -2346,7 +2346,7 @@ function ccvmsethostfiled(){
   .then(function(data){
     var clusterJsonConf = JSON.parse(data);
 
-    var count = clusterJsonConf.clusterConfig.hosts.length;
+    var count = clusterJsonConf.clusterConfig.hosts.filter(host => host.role !== "compute").length;
     var iscsi_check = clusterJsonConf.clusterConfig.iscsi_storage;
     //장애조치 클러스터 동적 셋팅
     updateHostFields(count);

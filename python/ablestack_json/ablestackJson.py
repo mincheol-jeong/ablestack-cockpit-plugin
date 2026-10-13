@@ -213,6 +213,7 @@ def jsonAllUpdate():
     try:
         json_data = openAblestackJson()
         if os_type == "ablestack-hci" or os_type == "ablestack-hci-filesystem":
+            # Completion flag also applies to compute hosts without a local SCVM.
             json_data["bootstrap"]["scvm"] = "true"
         elif os_type == "powerflex":
             json_data["bootstrap"]["pfmp"] = "true"

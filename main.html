@@ -57,7 +57,7 @@
         <section class="pf-v6-c-page__main-section">
             <div class="pf-v6-l-grid pf-m-gutter">
                 <div class="pf-v6-l-grid__item pf-m-12-col" id="div-grid-main">
-                    <div class="pf-v6-l-grid pf-m-gutter">
+                    <div class="pf-v6-l-grid pf-m-gutter" id="ablestack-status-grid">
                         <div class="pf-v6-l-grid__item pf-m-6-col" id="div-card-gfs-cluster-status" style="display: none;">
                             <!-- GFS 리소스 상태 카드 영역 시작-->
                             <div class="pf-v6-c-card pf-m-hoverable pf-m-compact" id="card-gfs-cluster-status" style="overflow: visible;">
@@ -258,6 +258,9 @@
                                                 <li>
                                                     <button class="pf-v6-c-menu__item" type="button"
                                                         id="menu-item-remove-cube-host">Cube 호스트 제거</button>
+                                                </li>
+                                                <li id="menu-compute-node-remove" style="display:none">
+                                                    <button class="pf-v6-c-menu__item" data-compute-action="remove" type="button">컴퓨팅 노드 설정 제거</button>
                                                 </li>
                                             </ul>
                                         </div>
@@ -467,7 +470,7 @@
                                             style="font-size: var(--pf-v6-global--icon--FontSize--lg);padding-right: 15px"
                                             aria-hidden="true"></i>
                                     </div>
-                                    <div class="pf-v6-c-card__title ablestack-card-title-status" id="card-storage-cluster-status-title">인프라 클러스터 상태
+                                    <div class="pf-v6-c-card__title ablestack-card-title-status" id="card-cloud-cluster-status-title">인프라 클러스터 상태
                                     </div>
                                     <div class="pf-v6-c-card__actions">
                                         <div class="ablestack-menu-dropdown">
@@ -607,7 +610,7 @@
                                             style="font-size: var(--pf-v6-global--icon--FontSize--lg);padding-right: 15px"
                                             aria-hidden="true"></i>
                                     </div>
-                                    <div class="pf-v6-c-card__title ablestack-card-title-status" id="card-storage-cluster-status-title">스토리지센터 가상머신 상태
+                                    <div class="pf-v6-c-card__title ablestack-card-title-status" id="card-storage-vm-status-title">스토리지센터 가상머신 상태
                                     </div>
                                     <div class="pf-v6-c-card__actions">
                                         <div class="ablestack-menu-dropdown">
@@ -993,6 +996,8 @@
 <!-- ui 영역 끝  -->
 
 <!-- 모달 영역 시작  -->
+
+<div class="pf-v6-c-backdrop" id="div-modal-compute-node" style="display:none"></div>
 
 <!-- 클러스터 구성 준비 마법사 : ./src/features/cluster-config-prepare.html을 내용으로 load -->
 <div class="pf-v6-c-backdrop" id="div-modal-wizard-cluster-config-prepare"></div>
@@ -2290,6 +2295,7 @@
 <!-- <script src="./src/features/card-cloud-center-status.js"></script> -->
 <script src="./src/features/cloud-center-virtual-machine.js"></script>
 <script src="./src/features/main.js"></script>
+<script src="./src/features/compute-node.js"></script>
 <script src="./src/features/card-cloud-cluster-status.js"></script>
 <script src="./src/common/logger.js"></script>
 <!-- 해당 페이지에 필요한 javascript 파일 추가 영역 끝 -->

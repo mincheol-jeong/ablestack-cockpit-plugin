@@ -90,7 +90,8 @@ def create(args):
         host_list = []
         for f_val in json_data["clusterConfig"]["hosts"]:
             host_list.append(f_val["ablecube"])
-            host_list.append(f_val["scvmMngt"])
+            if f_val.get("role") != "compute":
+                host_list.append(f_val["scvmMngt"])
 
         ping_result = json.loads(python3(pluginpath+'/python/vm/host_ping_test.py', '-hns', host_list))
 

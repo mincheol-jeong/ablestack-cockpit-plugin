@@ -61,7 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ssh-port", type=int, default=22, help="현재 접속에 사용할 SSH 포트(기본: 22)")
     parser.add_argument("--dry-run", action="store_true", help="실행하지 않고 전송 명령만 결과에 담습니다")
     parser.add_argument("--retname", default="Security Update", help="createReturn에 사용할 retname 값")
-    parser.add_argument("--add-host", action="store_true", help="추가 호스트용: 로컬(ablestack-hci일 경우 scvm 포함)에만 security_patch.sh를 실행합니다")
+    parser.add_argument("--add-host", action="store_true", help="노드 추가용: 로컬(ablestack-hci일 경우 scvm 포함)에만 security_patch.sh를 실행합니다")
     parser.add_argument("--port-change", action="store_true", help="security_patch.sh 호출 시 --port-change 플래그를 함께 전달합니다")
     parser.add_argument("--update-json-file", action="store_true", help="security_patch.status 를 true 로 업데이트만 수행합니다(security_patch.sh 실행 안 함)")
     parser.add_argument("--local", action="store_true", help="--update-json-file 사용 시, ssh 대신 현재 호스트에서만 JSON 업데이트를 수행합니다")
@@ -540,7 +540,10 @@ def main():
 
             # 2) ablestack-hci 인 경우 scvm에도 ssh로 security_patch.sh 실행
             #    hosts 파일에 scvm 정의가 있다고 가정하고, 단순히 "scvm" 으로 접속합니다.
-            if cluster_type == "ablestack-hci":
+            local_compute = any(h.get("role") == "compute" and
+                                (h.get("hostname") == socket.gethostname() or h.get("ablecube") in get_local_ipv4s())
+                                for h in conf.get("clusterConfig", {}).get("hosts", []))
+            if cluster_type == "ablestack-hci" and not local_compute:
                 scvm_result = run_remote(
                     ip="scvm",
                     user=args.ssh_user,
@@ -571,7 +574,7 @@ def main():
                     "successPattern": SUCCESS_PATTERN,
                     "clusterType": cluster_type,
                     "alone": True,
-                    "scvmIncluded": (cluster_type == "ablestack-hci")
+                    "scvmIncluded": (cluster_type == "ablestack-hci" and not local_compute)
                 },
                 "targets": results
             }

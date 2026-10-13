@@ -14,12 +14,87 @@ import os
 import json
 import socket
 import subprocess
+import ipaddress
+import re
 
 from ablestack import *
 from sh import python3
 from sh import ssh
 from python_hosts import Hosts, HostsEntry
 from pyfstab import Fstab, Entry
+
+# Profile import and serialization are independent of compute enrollment operations.
+def is_compute(host):
+    return host.get('role') == 'compute'
+
+
+def same_host(a, b):
+    return a.lower().rstrip('.') == b.lower().rstrip('.') or a.split('.')[0].lower() == b.split('.')[0].lower()
+
+
+
+def validate_imported_compute_host(data, config):
+    name = str(data.get('hostname', '')).strip().lower()
+    short_name = name.split('.')[0]
+    if (len(name) > 253 or not name or any(not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', p) for p in name.split('.'))
+            or short_name in ('localhost', 'ablecube', 'scvm', 'ccvm', 'ccvm-mngt', 'gwvm', 'gwvm-mngt')
+            or re.fullmatch(r'pn-ablecube\d*', short_name) or 'scvm' in name):
+        raise ValueError('유효한 호스트명을 입력하십시오. 예약 이름과 scvm 이름은 사용할 수 없습니다.')
+    node = {'hostname': name, 'role': 'compute'}
+    for key in ('ablecube', 'ablecubePn'):
+        address = ipaddress.IPv4Address(str(data.get(key, '')).strip())
+        if address.is_unspecified or address.is_loopback or address.is_multicast or address.is_link_local:
+            raise ValueError('관리 IP와 HPN IP에는 호스트에 할당된 IPv4 주소를 입력하십시오.')
+        node[key] = str(address)
+    if node['ablecube'] == node['ablecubePn']:
+        raise ValueError('관리 IP와 HPN IP는 서로 달라야 합니다.')
+    root = config['clusterConfig']
+    for host in root['hosts']:
+        if same_host(host['hostname'], name):
+            raise ValueError('이미 등록된 호스트명입니다.')
+        existing = {host.get(k) for k in ('ablecube', 'ablecubePn', 'scvmMngt', 'scvm', 'scvmCn')}
+        if existing.intersection((node['ablecube'], node['ablecubePn'])):
+            raise ValueError('클러스터에서 이미 사용하는 IP입니다.')
+    for vm in ('ccvm', 'gwvm', 'pfmp'):
+        if set(root.get(vm, {}).values()).intersection((node['ablecube'], node['ablecubePn'])):
+            raise ValueError('클러스터 VM에서 이미 사용하는 IP입니다.')
+    node['index'] = str(data['index'])
+    return {key: node[key] for key in ('index', 'hostname', 'ablecube', 'ablecubePn', 'role')}
+
+
+
+def preserve_compute_hosts(submitted, existing, *, allow_initial_import=False):
+    """Protect membership, except when importing a profile onto an unconfigured HCI host."""
+    if allow_initial_import and not existing:
+        indices = [str(host['index']) for host in submitted]
+        if any(not index.isdigit() or int(index) < 1 for index in indices) or len({int(index) for index in indices}) != len(indices):
+            raise ValueError('호스트 번호는 중복되지 않는 양수여야 합니다.')
+        result = []
+        for host in submitted:
+            if is_compute(host):
+                others = [other for other in submitted if other is not host]
+                node = validate_imported_compute_host(host, {'clusterConfig': {'hosts': others}})
+                node['index'] = str(host['index'])
+                result.append(node)
+            else:
+                result.append(host)
+        return result
+    compute = [host for host in existing if is_compute(host)]
+    result = []
+    for host in submitted:
+        if is_compute(host):
+            if host not in compute:
+                raise ValueError('컴퓨팅 노드는 전용 추가·제거 화면에서 관리하십시오.')
+            continue
+        addresses = {host.get(key) for key in ('ablecube', 'ablecubePn', 'scvmMngt', 'scvm', 'scvmCn')} - {None, ''}
+        for node in compute:
+            if (same_host(host['hostname'], node['hostname']) or str(host['index']) == str(node['index'])
+                    or addresses.intersection((node['ablecube'], node['ablecubePn']))):
+                raise ValueError('기존 컴퓨팅 노드의 호스트명·번호·IP와 충돌합니다.')
+        result.append(host)
+    return result + compute
+
+
 
 json_file_path = pluginpath+"/tools/properties/cluster.json"
 hosts_file_path = "/etc/hosts"
@@ -138,9 +213,17 @@ def insert(args):
             if args.json_string is not None:
                 # 파라미터로 받아온 json으로 변환
                 param_json = json.loads(args.json_string)
+                param_json = preserve_compute_hosts(param_json, json_data["clusterConfig"]["hosts"],
+                    allow_initial_import=args.type == "ablestack-hci")
+                args.json_string = json.dumps(param_json)
 
                 # hosts 정보가 존재하면 기존 file json 데이터를 param json 데이터로 교체
                 for p_val in param_json:
+                    if is_compute(p_val):
+                        existing = next((h for h in json_data["clusterConfig"]["hosts"] if h["hostname"] == p_val["hostname"]), None)
+                        if existing is None:
+                            json_data["clusterConfig"]["hosts"].append(p_val)
+                        continue
                     not_matching = True
                     for f_val in json_data["clusterConfig"]["hosts"]:
                         if f_val["hostname"] == p_val["hostname"]:
@@ -190,9 +273,17 @@ def insert(args):
             if args.json_string is not None:
                 # 파라미터로 받아온 json으로 변환
                 param_json = json.loads(args.json_string)
+                param_json = preserve_compute_hosts(param_json, json_data["clusterConfig"]["hosts"],
+                    allow_initial_import=args.type == "ablestack-hci")
+                args.json_string = json.dumps(param_json)
 
                 # hosts 정보가 존재하면 기존 file json 데이터를 param json 데이터로 교체
                 for p_val in param_json:
+                    if is_compute(p_val):
+                        existing = next((h for h in json_data["clusterConfig"]["hosts"] if h["hostname"] == p_val["hostname"]), None)
+                        if existing is None:
+                            json_data["clusterConfig"]["hosts"].append(p_val)
+                        continue
                     not_matching = True
                     for f_val in json_data["clusterConfig"]["hosts"]:
                         if f_val["hostname"] == p_val["hostname"]:
@@ -244,7 +335,7 @@ def insert(args):
 
     except Exception as e:
         # 결과값 리턴
-        return createReturn(code=500, val="Please check the \"cluster.json\" file. : "+e)
+        return createReturn(code=500, val="Please check the \"cluster.json\" file. : "+str(e))
 
 # ccvm 배포할 때 사용됨
 # 모든 호스트 및 scvm에 적용
@@ -255,12 +346,15 @@ def insertScvmHost(args):
         if args.json_string is not None:
             # 파라미터로 받아온 json으로 변환
             param_json = json.loads(args.json_string)
+            param_json = preserve_compute_hosts(param_json, json_data["clusterConfig"]["hosts"])
+            args.json_string = json.dumps(param_json)
 
             # ping test로 네트워크가 연결되어 있는지 상태 체크하는 부분
             ping_check_list = []
             for p_val1 in param_json:
                 ping_check_list.append(p_val1["ablecube"])
-                ping_check_list.append(p_val1["scvmMngt"])
+                if not is_compute(p_val1):
+                    ping_check_list.append(p_val1["scvmMngt"])
 
 
             ping_result = json.loads(python3(pluginpath+'/python/vm/host_ping_test.py', '-hns', ping_check_list))
@@ -275,6 +369,8 @@ def insertScvmHost(args):
                     if ret != "ok":
                         return createReturn(code=500, val=return_val + " : " + p_val2["ablecube"])
 
+                    if is_compute(p_val2):
+                        continue
                     ret = ssh('-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=5', p_val2["scvmMngt"], "echo ok").strip()
                     if ret != "ok":
                         return createReturn(code=500, val=return_val + " : " + p_val2["scvmMngt"])
@@ -286,7 +382,7 @@ def insertScvmHost(args):
 
                         cmd_str = "python3 /usr/share/cockpit/ablestack/python/cluster/cluster_config.py insert"
                         cmd_str += " -js '" + args.json_string + "'"
-                        cmd_str += " -co withScvm"
+                        cmd_str += " -co hostOnly" if is_compute(p_val3) else " -co withScvm"
                         cmd_str += " -t " + args.type
 
                         pcs_list = " ".join(args.pcs_cluster_list)
@@ -302,7 +398,7 @@ def insertScvmHost(args):
         # 결과값 리턴
         return createReturn(code=500, val=return_val)
 
-# cluster 구성 준비 메뉴에서 추가 호스트인 경우에 실행됨
+# cluster 구성 준비 메뉴에서 노드 추가인 경우에 실행됨
 # 모든 호스트, ccvm, scvm (클러스터 구성 준비 호스트에서는 제외 : 클러스터 구성 준비 단계에서는 해당 호스트에 scvm이 없는 상태이기 때문에 작업할 수 없음)
 def insertAllHost(args):
     return_val = "The ping test failed. Check ablecube hosts and ccvm and scvms network IPs. Please check the config.json file."
@@ -312,12 +408,15 @@ def insertAllHost(args):
             #hostname = socket.gethostname()
             # 파라미터로 받아온 json으로 변환
             param_json = json.loads(args.json_string)
+            param_json = preserve_compute_hosts(param_json, json_data["clusterConfig"]["hosts"],
+                    allow_initial_import=args.type == "ablestack-hci")
+            args.json_string = json.dumps(param_json)
             # ping test로 네트워크가 연결되어 있는지 상태 체크하는 부분
             ping_check_list = []
             for p_val1 in param_json:
                 ping_check_list.append(p_val1["ablecube"])
                 if args.type == "ablestack-hci":
-                    if args.exclude_hostname != p_val1["hostname"]:
+                    if not is_compute(p_val1) and args.exclude_hostname != p_val1["hostname"]:
                         ping_check_list.append(p_val1["scvmMngt"])
 
             ping_check_list.append(args.ccvm_mngt_ip)
@@ -333,12 +432,12 @@ def insertAllHost(args):
                         return createReturn(code=500, val=return_val + " : " + p_val2["ablecube"])
                     os.system("touch /var/lib/libvirt/images/ccvm-cloudinit.iso")
                     os.system("chmod 777 /var/lib/libvirt/images/ccvm-cloudinit.iso")
-                    # 추가 호스트인 경우 tpm.properties, uefi.properties 파일도 복사
+                    # 노드 추가인 경우 tpm.properties, uefi.properties 파일도 복사
                     os.system("scp /etc/cloudstack/agent/tpm.properties "+p_val2["ablecube"]+":/etc/cloudstack/agent/tpm.properties")
                     os.system("scp /etc/cloudstack/agent/uefi.properties "+p_val2["ablecube"]+":/etc/cloudstack/agent/uefi.properties")
                     # 호스트 추가시 클러스터 구성단계에서는 scvm이 배포되기 전이므로 해당 scvm에 echo 테스트 명령을 수행할 수 없음
                     if args.type == "ablestack-hci":
-                        if args.exclude_hostname != p_val2["hostname"]:
+                        if not is_compute(p_val2) and args.exclude_hostname != p_val2["hostname"]:
                             ret = ssh('-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=5', p_val2["scvmMngt"], "echo ok").strip()
                             if ret != "ok":
                                 return createReturn(code=500, val=return_val + " : " + p_val2["scvmMngt"])
@@ -366,7 +465,9 @@ def insertAllHost(args):
                         cmd_str += " -ets "+args.extenal_timeserver
 
                     if args.type == "ablestack-hci":
-                        if args.exclude_hostname != p_val3["hostname"]:
+                        if is_compute(p_val3):
+                            cmd_str += " -co hostOnly"
+                        elif args.exclude_hostname != p_val3["hostname"]:
                             cmd_str += " -co withScvm"
                         else:
                             cmd_str += " -co withCcvm"
@@ -399,6 +500,8 @@ def remove(args):
             elif len(json_data["clusterConfig"]["hosts"])-1 > json_index:
                 json_index = json_index+1
 
+        if match_yn and is_compute(json_data["clusterConfig"]["hosts"][json_index]):
+            return createReturn(code=400, val="Use the compute node settings removal UI.")
         if match_yn:
             my_hosts = Hosts(path=hosts_file_path)
             # hosts 파일 내용 ip로 제거
@@ -435,7 +538,7 @@ def remove(args):
 
     except Exception as e:
         # 결과값 리턴
-        return createReturn(code=500, val="Please check the \"cluster.json\" file. : "+e)
+        return createReturn(code=500, val="Please check the \"cluster.json\" file. : "+str(e))
 
 def reset_cluster_config():
     clusterConfig = json_data["clusterConfig"]
@@ -484,6 +587,9 @@ def PingCheck(args):
         if args.json_string is not None:
             # 파라미터로 받아온 json으로 변환
             param_json = json.loads(args.json_string)
+            param_json = preserve_compute_hosts(param_json, json_data["clusterConfig"]["hosts"],
+                    allow_initial_import=args.type == "ablestack-hci")
+            args.json_string = json.dumps(param_json)
 
             # ping test로 네트워크가 연결되어 있는지 상태 체크하는 부분
             ping_check_list = []

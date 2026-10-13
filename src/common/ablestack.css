@@ -777,3 +777,152 @@ html.pf-v6-theme-dark #div-modal-disk-image-create .pf-v6-c-form-control {
   --pf-v6-c-alert--BoxShadow: none;
   box-shadow: none;
 }
+
+/* Compute-node dialogs share the existing PatternFly modal and form palette. */
+#div-modal-compute-node [hidden] { display: none !important; }
+#div-modal-compute-node .compute-node-backdrop-layout { padding: 16px; }
+#div-modal-compute-node .compute-node-modal {
+  width: min(48rem, calc(100vw - 2rem));
+  max-width: 48rem;
+  max-height: calc(100dvh - 2rem);
+  border-radius: var(--pf-t--global--border--radius--large, 12px);
+  overflow: hidden;
+}
+#div-modal-compute-node .compute-node-header {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+}
+#div-modal-compute-node .compute-node-title-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: var(--pf-t--global--background--color--secondary--default);
+  color: var(--pf-t--global--icon--color--brand--default);
+  font-size: 20px;
+}
+#div-modal-compute-node .compute-node-subtitle,
+#div-modal-compute-node .compute-node-helper {
+  margin-top: 6px;
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: var(--pf-t--global--font--size--body--sm);
+  line-height: 1.6;
+}
+#div-modal-compute-node .compute-node-body {
+  padding-top: 24px;
+  padding-bottom: 24px;
+  overflow-y: auto;
+}
+#div-modal-compute-node .compute-node-guide {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 14px 16px;
+  margin-bottom: 24px;
+  border-radius: 8px;
+  background: var(--pf-t--global--background--color--secondary--default);
+  font-size: var(--pf-t--global--font--size--body--sm);
+}
+#div-modal-compute-node .compute-node-guide > i { color: var(--pf-t--global--icon--color--brand--default); }
+#div-modal-compute-node .compute-node-guide p { margin-top: 4px; color: var(--pf-t--global--text--color--subtle); line-height: 1.6; }
+#div-modal-compute-node .compute-node-fields { display: grid; gap: 20px; }
+#div-modal-compute-node .compute-node-field { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 16px; align-items: start; }
+#div-modal-compute-node .compute-node-field > label { padding-top: 8px; }
+#div-modal-compute-node .compute-node-confirmations { border: 1px solid var(--pf-t--global--border--color--default); border-radius: 8px; padding: 16px; min-width: 0; }
+#div-modal-compute-node .compute-node-confirmations legend { padding-inline: 6px; font-weight: 600; font-size: var(--pf-t--global--font--size--body--sm); }
+#div-modal-compute-node .compute-node-confirmations .pf-v6-c-check + .pf-v6-c-check { margin-top: 16px; }
+#div-modal-compute-node .compute-node-isolation { padding-top: 16px; border-top: 1px solid var(--pf-t--global--border--color--default); }
+#div-modal-compute-node .compute-node-review { padding: 16px; border: 1px solid var(--pf-t--global--border--color--default); border-radius: 8px; }
+#div-modal-compute-node .compute-node-review h2 { font-weight: 600; font-size: var(--pf-t--global--font--size--body--default); margin-bottom: 12px; }
+#div-modal-compute-node .compute-node-review dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+#div-modal-compute-node .compute-node-review dt { color: var(--pf-t--global--text--color--subtle); font-size: var(--pf-t--global--font--size--body--sm); margin-bottom: 4px; }
+#div-modal-compute-node .compute-node-review dd { overflow-wrap: anywhere; font-weight: 600; }
+#div-modal-compute-node .compute-node-review p { margin-top: 12px; font-size: var(--pf-t--global--font--size--body--sm); }
+#div-modal-compute-node .compute-node-status { margin-top: 24px; }
+#div-modal-compute-node #compute-node-feedback { white-space: pre-line; overflow-wrap: anywhere; font-size: var(--pf-t--global--font--size--body--sm); }
+#div-modal-compute-node .compute-node-pending:empty { display: none; }
+#div-modal-compute-node .compute-node-operation { padding: 16px; margin-top: 20px; border: 1px solid var(--pf-t--global--border--color--status--warning--default); border-radius: 8px; }
+#div-modal-compute-node .compute-node-operation p { margin-bottom: 8px; overflow-wrap: anywhere; }
+#div-modal-compute-node .compute-node-operation p:first-child { font-weight: 600; }
+#div-modal-compute-node .compute-node-footer { padding-top: 20px; border-top: 1px solid var(--pf-t--global--border--color--default); gap: 12px; }
+@media (max-width: 600px) {
+  #div-modal-compute-node .compute-node-field { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  #div-modal-compute-node .compute-node-field > label { padding-top: 0; }
+  #div-modal-compute-node .compute-node-title-icon { display: none; }
+  #div-modal-compute-node .compute-node-review dl { grid-template-columns: minmax(0, 1fr); }
+  #div-modal-compute-node .compute-node-footer { flex-wrap: wrap; }
+}
+
+/* Compute enrollment keeps the existing wizard layout and table. */
+#div-modal-wizard-cluster-config-prepare #cluster-compute-option[hidden],
+#div-modal-wizard-cluster-config-prepare #cluster-compute-feedback[hidden],
+#div-modal-wizard-cluster-config-prepare #cluster-compute-review[hidden],
+#div-modal-wizard-cluster-config-prepare #cluster-compute-finish-message[hidden] { display: none !important; }
+#div-modal-wizard-cluster-config-prepare #cluster-compute-message { white-space: pre-line; }
+#div-modal-wizard-cluster-config-prepare #cluster-compute-feedback {
+  border-inline-start: 3px solid var(--pf-t--global--color--status--info--default, #0066cc);
+}
+
+#div-modal-compute-node .compute-node-target-details { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 16px; border-radius: 8px; background: var(--pf-t--global--background--color--secondary--default); }
+#div-modal-compute-node .compute-node-target-details dt { color: var(--pf-t--global--text--color--subtle); font-size: var(--pf-t--global--font--size--body--sm); margin-bottom: 6px; }
+#div-modal-compute-node .compute-node-target-details dd { font-weight: 600; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  #div-modal-compute-node .compute-node-target-details { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Each compute dashboard column stacks its cards independently. */
+#ablestack-status-grid.compute-dashboard-layout {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+#ablestack-status-grid.compute-dashboard-layout > .compute-dashboard-column {
+  display: flex;
+  flex-direction: column;
+  grid-column: auto;
+  gap: 1rem;
+  min-width: 0;
+}
+@media (max-width: 768px) {
+  #ablestack-status-grid.compute-dashboard-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+#div-modal-compute-node #compute-node-check { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+
+/* Cluster type selection uses three equal cards within the preparation wizard. */
+#div-modal-wizard-cluster-config-cluster-type .cluster-prepare-type-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+#div-modal-wizard-cluster-config-cluster-type .cluster-prepare-type-options > button {
+  --pf-v6-c-button--BorderRadius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 20px 16px;
+  border-radius: 12px;
+  white-space: normal;
+}
+#div-modal-wizard-cluster-config-cluster-type .cluster-prepare-type-options > button::after { border-radius: 12px; }
+#div-modal-wizard-cluster-config-cluster-type .cluster-prepare-type-options > button .ablestack-cluster-type-title {
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+#div-modal-wizard-cluster-config-cluster-type .cluster-prepare-type-options > button.is-selected {
+  box-shadow: inset 0 0 0 2px var(--pf-t--global--color--brand--default, #0066cc);
+}
+#div-modal-wizard-cluster-config-cluster-type .cluster-prepare-type-options > button[hidden] { display: none; }
+@media (max-width: 768px) {
+  #div-modal-wizard-cluster-config-cluster-type .cluster-prepare-type-options { grid-template-columns: minmax(0, 1fr); }
+}
